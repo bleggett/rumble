@@ -1,7 +1,7 @@
 use ::Result;
 
 use api::{Characteristic, CharPropFlags, Callback, PeripheralProperties, BDAddr, Central,
-          Peripheral as ApiPeripheral};
+          Peripheral};
 use std::mem::size_of;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ impl Clone for L2CapOptions {
 }
 
 #[derive(Clone)]
-pub struct Peripheral {
+pub struct DiscoveredPeripheral {
     c_adapter: ConnectedAdapter,
     address: BDAddr,
     properties: Arc<Mutex<PeripheralProperties>>,
@@ -78,7 +78,7 @@ pub struct Peripheral {
     message_queue: Arc<Mutex<VecDeque<ACLData>>>,
 }
 
-impl Display for Peripheral {
+impl Display for DiscoveredPeripheral {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let connected = if self.is_connected() { " connected" } else { "" };
         let properties = self.properties.lock().unwrap();
@@ -87,7 +87,7 @@ impl Display for Peripheral {
     }
 }
 
-impl Debug for Peripheral {
+impl Debug for DiscoveredPeripheral {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let connected = if self.is_connected() { " connected" } else { "" };
         let properties = self.properties.lock().unwrap();
@@ -97,10 +97,10 @@ impl Debug for Peripheral {
     }
 }
 
-impl Peripheral {
-    pub fn new(c_adapter: ConnectedAdapter, address: BDAddr) -> Peripheral {
+impl DiscoveredPeripheral {
+    pub fn new(c_adapter: ConnectedAdapter, address: BDAddr) -> DiscoveredPeripheral {
         let (connection_tx, connection_rx) = channel();
-        Peripheral {
+        DiscoveredPeripheral {
             c_adapter, address,
             properties: Arc::new(Mutex::new(PeripheralProperties::default())),
             characteristics: Arc::new(Mutex::new(BTreeSet::new())),
@@ -205,7 +205,7 @@ impl Peripheral {
     }
 
     fn request_raw(&self, data: &mut [u8]) -> Result<Vec<u8>> {
-        Peripheral::wait_until_done(|done: RequestCallback| {
+        DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
             // TODO this copy can be avoided
             let mut data = data.to_vec();
             self.request_raw_async(&mut data, Some(done));
@@ -250,7 +250,7 @@ impl Peripheral {
 
                 let mut value_buf = BytesMut::with_capacity(2);
                 value_buf.put_u16_le(value);
-                let data = Peripheral::wait_until_done(|done: RequestCallback| {
+                let data = DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
                     self.request_by_handle(resp.handle, &*value_buf, Some(done))
                 })?;
 
@@ -294,7 +294,7 @@ impl Peripheral {
     }
 }
 
-impl ApiPeripheral for Peripheral {
+impl Peripheral for DiscoveredPeripheral {
     fn address(&self) -> BDAddr {
         self.address.clone()
     }
@@ -499,7 +499,7 @@ impl ApiPeripheral for Peripheral {
     }
 
     fn command(&self, characteristic: &Characteristic, data: &[u8]) -> Result<()> {
-        Peripheral::wait_until_done(|done: CommandCallback| {
+        DiscoveredPeripheral::wait_until_done(|done: CommandCallback| {
             self.command_async(characteristic, data, Some(done));
         })
     }
@@ -509,7 +509,7 @@ impl ApiPeripheral for Peripheral {
     }
 
     fn request(&self, characteristic: &Characteristic, data: &[u8]) -> Result<Vec<u8>> {
-        Peripheral::wait_until_done(|done: RequestCallback| {
+        DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
             self.request_async(characteristic, data, Some(done));
         })
     }
@@ -521,7 +521,7 @@ impl ApiPeripheral for Peripheral {
     }
 
     fn read_by_type(&self, characteristic: &Characteristic, uuid: UUID) -> Result<Vec<u8>> {
-        Peripheral::wait_until_done(|done: RequestCallback| {
+        DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
             self.read_by_type_async(characteristic, uuid, Some(done));
         })
     }

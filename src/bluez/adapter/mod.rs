@@ -1,5 +1,5 @@
 mod acl_stream;
-mod peripheral;
+mod discoveredperipheral;
 
 use libc;
 use std;
@@ -17,7 +17,7 @@ use api::{CentralEvent, BDAddr, Central};
 
 use bluez::util::handle_error;
 use bluez::protocol::hci;
-use bluez::adapter::peripheral::Peripheral;
+use bluez::adapter::discoveredperipheral::DiscoveredPeripheral;
 use bluez::constants::*;
 use api::EventHandler;
 
@@ -169,7 +169,7 @@ pub struct ConnectedAdapter {
     adapter_fd: i32,
     should_stop: Arc<AtomicBool>,
     pub scan_enabled: Arc<AtomicBool>,
-    peripherals: Arc<Mutex<HashMap<BDAddr, Peripheral>>>,
+    peripherals: Arc<Mutex<HashMap<BDAddr, DiscoveredPeripheral>>>,
     handle_map: Arc<Mutex<HashMap<u16, BDAddr>>>,
     event_handlers: Arc<Mutex<Vec<EventHandler>>>,
 }
@@ -299,7 +299,7 @@ impl ConnectedAdapter {
                     let peripheral = peripherals.entry(info.bdaddr)
                         .or_insert_with(|| {
                             new = true;
-                            Peripheral::new(self.clone(), info.bdaddr)
+                            DiscoveredPeripheral::new(self.clone(), info.bdaddr)
                         });
 
 
@@ -393,7 +393,7 @@ impl ConnectedAdapter {
     }
 }
 
-impl Central<Peripheral> for ConnectedAdapter {
+impl Central<DiscoveredPeripheral> for ConnectedAdapter {
     fn on_event(&self, handler: EventHandler) {
         let list = self.event_handlers.clone();
         list.lock().unwrap().push(handler);
@@ -408,12 +408,12 @@ impl Central<Peripheral> for ConnectedAdapter {
         self.set_scan_enabled(false)
     }
 
-    fn peripherals(&self) -> Vec<Peripheral> {
+    fn peripherals(&self) -> Vec<DiscoveredPeripheral> {
         let l = self.peripherals.lock().unwrap();
         l.values().map(|p| p.clone()).collect()
     }
 
-    fn peripheral(&self, address: BDAddr) -> Option<Peripheral> {
+    fn peripheral(&self, address: BDAddr) -> Option<DiscoveredPeripheral> {
         let l = self.peripherals.lock().unwrap();
         l.get(&address).map(|p| p.clone())
     }
