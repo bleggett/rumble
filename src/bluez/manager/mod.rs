@@ -107,6 +107,7 @@ impl Manager {
 
     /// Establishes a connection to an adapter. Returns a `ConnectedAdapter`, which is the
     /// [`Central`](../../api/trait.Central.html) implementation for BlueZ.
+    // TODO Can we return a Central here since we basically are?
     pub fn connect(&self, adapter: &Adapter) -> Result<ConnectedAdapter> {
         ConnectedAdapter::new(adapter)
     }

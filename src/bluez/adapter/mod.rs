@@ -4,19 +4,25 @@ mod discoveredperipheral;
 use libc;
 use std;
 use std::ffi::CStr;
+use std::mem::size_of;
 use nom::IResult;
 use bytes::{BytesMut, BufMut};
 
 use std::collections::{HashSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use std::thread;
 
 use ::Result;
-use api::{CentralEvent, BDAddr, Central};
+use ::Error;
+use api::{CentralEvent, Characteristic, BDAddr, Central, CommandCallback, RequestCallback, NotificationHandler, UUID, PeripheralDescriptor};
 
 use bluez::util::handle_error;
 use bluez::protocol::hci;
+use bluez::protocol::att;
+use bluez::adapter::acl_stream::{ACLStream};
 use bluez::adapter::discoveredperipheral::DiscoveredPeripheral;
 use bluez::constants::*;
 use api::EventHandler;
@@ -56,6 +62,20 @@ impl HCIDevStats {
             byte_tx: 0u32
         }
     }
+}
+
+#[derive(Copy, Debug)]
+#[repr(C)]
+pub struct SockaddrL2 {
+    l2_family: libc::sa_family_t,
+    l2_psm: u16,
+    l2_bdaddr: BDAddr,
+    l2_cid: u16,
+    l2_bdaddr_type: u32,
+}
+
+impl Clone for SockaddrL2 {
+    fn clone(&self) -> Self { *self }
 }
 
 #[derive(Copy, Debug)]
@@ -174,6 +194,7 @@ pub struct ConnectedAdapter {
     event_handlers: Arc<Mutex<Vec<EventHandler>>>,
 }
 
+//TODO remove `unwrap`s
 impl ConnectedAdapter {
     pub fn new(adapter: &Adapter) -> Result<ConnectedAdapter> {
         let adapter_fd = handle_error(unsafe {
@@ -316,7 +337,7 @@ impl ConnectedAdapter {
                 info!("connected to {:?}", info);
                 let address = info.bdaddr.clone();
                 let handle = info.handle.clone();
-                match self.peripheral(address) {
+                match self.get_discovered_peripheral(address) {
                     Some(peripheral) => {
                         peripheral.handle_device_message(&hci::Message::LEConnComplete(info))
                     }
@@ -345,7 +366,7 @@ impl ConnectedAdapter {
                 let mut handles = self.handle_map.lock().unwrap();
                 match handles.remove(&handle) {
                     Some(addr) => {
-                        match self.peripheral(addr) {
+                        match self.get_discovered_peripheral(addr) {
                             Some(peripheral) => peripheral.handle_device_message(&message),
                             None => warn!("got disconnect for unknown device {}", addr),
                         };
@@ -391,9 +412,34 @@ impl ConnectedAdapter {
         let mut buf = hci::hci_command(LE_SET_SCAN_ENABLE_CMD, &*data);
         self.write(&mut *buf)
     }
+
+
+    /// Returns a DiscoveredPeripheral instance, for internal use.
+    fn get_discovered_peripheral(&self, address: BDAddr) -> Option<&DiscoveredPeripheral>{
+        let l = self.peripherals.lock().unwrap();
+        l.get(&address)
+    }
+}
+//TODO
+impl PeripheralDescriptor {
+    pub fn new(d_periph: DiscoveredPeripheral) -> PeripheralDescriptor {
+        PeripheralDescriptor {
+            address: d_periph.address,
+            address_type: d_periph.address_type,
+            local_name: Some(d_periph.local_name),
+            characteristics: d_periph.characteristics,
+            is_connected: d_periph.is_connected,
+            tx_power_level: Some(d_periph.tx_power_level),
+            manufacturer_data: Some(d_periph.manufacturer_data),
+            discovery_count: d_periph.discovery_count,
+        }
+    }
 }
 
-impl Central<DiscoveredPeripheral> for ConnectedAdapter {
+// TODO This Central trait has nothing to do with the Peripheral struct/trait.
+// it *should* be constrained to a ConnectedAdapter
+// pub trait Central<C : Peripheral>: Send + Sync + Clone {
+impl Central for ConnectedAdapter {
     fn on_event(&self, handler: EventHandler) {
         let list = self.event_handlers.clone();
         list.lock().unwrap().push(handler);
@@ -408,14 +454,258 @@ impl Central<DiscoveredPeripheral> for ConnectedAdapter {
         self.set_scan_enabled(false)
     }
 
-    fn peripherals(&self) -> Vec<DiscoveredPeripheral> {
+    fn peripherals(&self) -> Vec<PeripheralDescriptor> {
         let l = self.peripherals.lock().unwrap();
-        l.values().map(|p| p.clone()).collect()
+        l.values().map(|p| PeripheralDescriptor::new(*p)).collect()
     }
 
-    fn peripheral(&self, address: BDAddr) -> Option<DiscoveredPeripheral> {
+    fn peripheral(&self, address: BDAddr) -> Option<PeripheralDescriptor> {
         let l = self.peripherals.lock().unwrap();
-        l.get(&address).map(|p| p.clone())
+        l.get(&address).map(|p| PeripheralDescriptor::new(*p))
+    }
+
+    fn connect(&self, address: BDAddr) -> Result<()> {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        // take lock on stream
+        let mut stream = peripheral.stream.write().unwrap();
+
+        if stream.is_some() {
+            // we're already connected, just return
+            return Ok(());
+        }
+
+        // create the socket on which we'll communicate with the device
+        let fd = handle_error(unsafe {
+            libc::socket(libc::AF_BLUETOOTH, libc::SOCK_SEQPACKET, 0)
+        })?;
+        debug!("created socket {} to communicate with device", fd);
+
+        let local_addr = SockaddrL2 {
+            l2_family: libc::AF_BLUETOOTH as libc::sa_family_t,
+            l2_psm: 0,
+            l2_bdaddr: self.adapter.addr,
+            l2_cid: ATT_CID,
+            l2_bdaddr_type: self.adapter.typ.num() as u32,
+        };
+
+        // bind to the socket
+        handle_error(unsafe {
+            libc::bind(fd, &local_addr as *const SockaddrL2 as *const libc::sockaddr,
+                       size_of::<SockaddrL2>() as u32)
+        })?;
+        debug!("bound to socket {}", fd);
+
+        // configure it as a bluetooth socket
+        let mut opt = [1u8, 0];
+        handle_error(unsafe {
+            libc::setsockopt(fd, libc::SOL_BLUETOOTH, 4, opt.as_mut_ptr() as *mut libc::c_void, 2)
+        })?;
+        debug!("configured socket {}", fd);
+
+        let addr = SockaddrL2 {
+            l2_family: libc::AF_BLUETOOTH as u16,
+            l2_psm: 0,
+            l2_bdaddr: peripheral.address,
+            l2_cid: ATT_CID,
+            l2_bdaddr_type: 1,
+        };
+
+        // connect to the device
+        handle_error(unsafe {
+            libc::connect(fd, &addr as *const SockaddrL2 as *const libc::sockaddr,
+                          size_of::<SockaddrL2>() as u32)
+        }).unwrap();
+        debug!("connected to device {} over socket {}", peripheral.address, fd);
+
+        // restart scanning if we were already, as connecting to a device seems to kill it
+        if self.scan_enabled.load(Ordering::Relaxed) {
+            self.start_scan()?;
+            debug!("restarted scanning");
+        }
+
+        // wait until we get the connection notice
+        let timeout = Duration::from_secs(20);
+        match peripheral.connection_rx.lock().unwrap().recv_timeout(timeout) {
+            Ok(handle) => {
+                // create the acl stream that will communicate with the device
+                let s = ACLStream::new(self.adapter.clone(),
+                                       peripheral.address, handle, fd);
+
+                // replay missed messages
+                let mut queue = peripheral.message_queue.lock().unwrap();
+                while !queue.is_empty() {
+                    let msg = queue.pop_back().unwrap();
+                    if s.handle == msg.handle {
+                        s.receive(&msg);
+                    }
+                }
+
+                *stream = Some(s);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(Error::TimedOut(timeout.clone()));
+            }
+            err => {
+                // unexpected error
+                err.unwrap();
+            }
+        };
+
+        Ok(())
+    }
+
+    fn disconnect(&self, address: BDAddr) -> Result<()> {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let mut l = peripheral.stream.write().unwrap();
+
+        if l.is_none() {
+            // we're already disconnected
+            return Ok(());
+        }
+
+        let handle = l.as_ref().unwrap().handle;
+
+        let mut data = BytesMut::with_capacity(3);
+        data.put_u16_le(handle);
+        data.put_u8(HCI_OE_USER_ENDED_CONNECTION);
+        let mut buf = hci::hci_command(DISCONNECT_CMD, &*data);
+        self.write(&mut *buf)?;
+
+        *l = None;
+        Ok(())
+    }
+
+    fn discover_characteristics(&self, address: BDAddr) -> Result<Vec<Characteristic>> {
+        self.discover_characteristics_in_range(address, 0x0001, 0xFFFF)
+    }
+
+    fn discover_characteristics_in_range(&self, address: BDAddr, start: u16, end: u16) -> Result<Vec<Characteristic>> {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let mut results = vec![];
+        let mut start = start;
+        loop {
+            debug!("discovering chars in range [{}, {}]", start, end);
+
+            let mut buf = att::read_by_type_req(start, end, UUID::B16(GATT_CHARAC_UUID));
+            let data = peripheral.request_raw(&mut buf)?;
+
+            match att::characteristics(&data).to_result() {
+                Ok(result) => {
+                    match result {
+                        Ok(chars) => {
+                            debug!("Chars: {:#?}", chars);
+
+                            // TODO this copy can be removed
+                            results.extend(chars.clone());
+
+                            if let Some(ref last) = chars.iter().last() {
+                                if last.start_handle < end - 1 {
+                                    start = last.start_handle + 1;
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        Err(err) => {
+                            // this generally means we should stop iterating
+                            debug!("got error: {:?}", err);
+                            break;
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("failed to parse chars: {:?}", err);
+                    return Err(Error::Other(format!("failed to parse characteristics response {:?}",
+                                                    err)));
+                }
+            }
+        }
+
+        // fix the end handles (we don't get them directly from device, so we have to infer)
+        for i in 0..results.len() {
+            (*results.get_mut(i).unwrap()).end_handle =
+                results.get(i + 1).map(|c| c.end_handle).unwrap_or(end);
+        }
+
+        // update our cache
+
+        results.iter().for_each(|c| { peripheral.characteristics.insert(c.clone());});
+
+        Ok(results)
+    }
+
+    fn command_async(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>) {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let l = peripheral.stream.read().unwrap();
+
+        match l.as_ref() {
+            Some(stream) => {
+                let mut buf = BytesMut::with_capacity(3 + data.len());
+                buf.put_u8(ATT_OP_WRITE_CMD);
+                buf.put_u16_le(characteristic.value_handle);
+                buf.put(data);
+
+                stream.write_cmd(&mut *buf, handler);
+            }
+            None => {
+                handler.iter().for_each(|h| h(Err(Error::NotConnected)));
+            }
+        }
+    }
+
+    fn command(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8]) -> Result<()> {
+        DiscoveredPeripheral::wait_until_done(|done: CommandCallback| {
+            self.command_async(address, characteristic, data, Some(done));
+        })
+    }
+
+    fn request_async(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<RequestCallback>) {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        peripheral.request_by_handle(characteristic.value_handle, data, handler);
+    }
+
+    fn request(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8]) -> Result<Vec<u8>> {
+        DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
+            self.request_async(address, characteristic, data, Some(done));
+        })
+    }
+
+    fn read_by_type_async(&self, address: BDAddr, characteristic: &Characteristic, uuid: UUID,
+                          handler: Option<RequestCallback>) {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let mut buf = att::read_by_type_req(characteristic.start_handle, characteristic.end_handle, uuid);
+        peripheral.request_raw_async(&mut buf, handler);
+    }
+
+    fn read_by_type(&self, address: BDAddr, characteristic: &Characteristic, uuid: UUID) -> Result<Vec<u8>> {
+        DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
+            self.read_by_type_async(address, characteristic, uuid, Some(done));
+        })
+    }
+
+    fn subscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        peripheral.notify(characteristic, true)
+    }
+
+    fn unsubscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        peripheral.notify(characteristic, false)
+    }
+
+    fn on_notification(&self, address: BDAddr, handler: NotificationHandler) {
+        let peripheral = self.get_discovered_peripheral(address).unwrap();
+
+        // TODO handle the disconnected case better
+        let l = peripheral.stream.read().unwrap();
+        match l.as_ref() {
+            Some(stream) => {
+                stream.on_notification(handler);
+            }
+            None => {
+                error!("tried to subscribe to notifications, but not yet connected")
+            }
+        }
     }
 }
 

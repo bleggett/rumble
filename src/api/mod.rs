@@ -153,104 +153,48 @@ impl Display for Characteristic {
     }
 }
 
-/// The properties of this peripheral, as determined by the advertising reports we've received for
-/// it.
+// /// The properties of this peripheral, as determined by the advertising reports we've received for
+// /// it.
+// #[derive(Debug, Default, Clone)]
+// pub struct PeripheralProperties {
+//     /// The address of this peripheral
+//     pub address: BDAddr,
+//     /// The type of address (either random or public)
+//     pub address_type: AddressType,
+//     /// The local name. This is generally a human-readable string that identifies the type of device.
+//     pub local_name: Option<String>,
+//     /// The transmission power level for the device
+//     pub tx_power_level: Option<i8>,
+//     /// Unstructured data set by the device manufacturer
+//     pub manufacturer_data: Option<Vec<u8>>,
+//     /// Number of times we've seen advertising reports for this device
+//     pub discovery_count: u32,
+//     /// True if we've discovered the device before
+//     pub has_scan_response: bool,
+// }
+
+
+/// Returns the set of properties associated with the peripheral. These may be updated over time
+/// as additional advertising reports are received.
 #[derive(Debug, Default, Clone)]
-pub struct PeripheralProperties {
+pub struct PeripheralDescriptor {
     /// The address of this peripheral
     pub address: BDAddr,
     /// The type of address (either random or public)
     pub address_type: AddressType,
     /// The local name. This is generally a human-readable string that identifies the type of device.
     pub local_name: Option<String>,
+    /// The set of characteristics we've discovered for this device. This will be empty until
+    /// `discover_characteristics` or `discover_characteristics_in_range` is called.
+    pub characteristics: BTreeSet<Characteristic>,
+    /// Returns true if we are currently connected to the device.
+    pub is_connected: bool,
     /// The transmission power level for the device
     pub tx_power_level: Option<i8>,
     /// Unstructured data set by the device manufacturer
     pub manufacturer_data: Option<Vec<u8>>,
     /// Number of times we've seen advertising reports for this device
     pub discovery_count: u32,
-    /// True if we've discovered the device before
-    pub has_scan_response: bool,
-}
-
-/// Peripheral is the device that you would like to communicate with (the "server" of BLE). This
-/// struct contains both the current state of the device (its properties, characteristics, etc.)
-/// as well as functions for communication.
-pub trait Peripheral: Send + Sync + Debug {
-    /// Returns the address of the peripheral.
-    fn address(&self) -> BDAddr;
-
-    /// Returns the set of properties associated with the peripheral. These may be updated over time
-    /// as additional advertising reports are received.
-    fn properties(&self) -> PeripheralProperties;
-
-    /// The set of characteristics we've discovered for this device. This will be empty until
-    /// `discover_characteristics` or `discover_characteristics_in_range` is called.
-    fn characteristics(&self) -> BTreeSet<Characteristic>;
-
-    /// Returns true iff we are currently connected to the device.
-    fn is_connected(&self) -> bool;
-
-    /// Creates a connection to the device. This is a synchronous operation; if this method returns
-    /// Ok there has been successful connection. Note that peripherals allow only one connection at
-    /// a time. Operations that attempt to communicate with a device will fail until it is connected.
-    fn connect(&self) -> Result<()>;
-
-    /// Terminates a connection to the device. This is a synchronous operation.
-    fn disconnect(&self) -> Result<()>;
-
-    /// Discovers all characteristics for the device. This is a synchronous operation.
-    fn discover_characteristics(&self) -> Result<Vec<Characteristic>>;
-
-    /// Discovers characteristics within the specified range of handles. This is a synchronous
-    /// operation.
-    fn discover_characteristics_in_range(&self, start: u16, end: u16) -> Result<Vec<Characteristic>>;
-
-    /// Sends a command (`write-without-response`) to the characteristic. Takes an optional callback
-    /// that will be notified in case of error or when the command has been successfully acked by the
-    /// device.
-    fn command_async(&self, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>);
-
-    /// Sends a command (write without response) to the characteristic. Synchronously returns a
-    /// `Result` with an error set if the command was not accepted by the device.
-    fn command(&self, characteristic: &Characteristic, data: &[u8]) -> Result<()>;
-
-    /// Sends a request (write) to the device. Takes an optional callback with either an error if
-    /// the request was not accepted or the response from the device.
-    fn request_async(&self, characteristic: &Characteristic,
-                     data: &[u8], handler: Option<RequestCallback>);
-
-    /// Sends a request (write) to the device. Synchronously returns either an error if the request
-    /// was not accepted or the response from the device.
-    fn request(&self, characteristic: &Characteristic,
-               data: &[u8]) -> Result<Vec<u8>>;
-
-    /// Sends a read-by-type request to device for the range of handles covered by the
-    /// characteristic and for the specified declaration UUID. See
-    /// [here](https://www.bluetooth.com/specifications/gatt/declarations) for valid UUIDs.
-    /// Takes an optional callback that will be called with an error or the device response.
-    fn read_by_type_async(&self, characteristic: &Characteristic,
-                          uuid: UUID, handler: Option<RequestCallback>);
-
-    /// Sends a read-by-type request to device for the range of handles covered by the
-    /// characteristic and for the specified declaration UUID. See
-    /// [here](https://www.bluetooth.com/specifications/gatt/declarations) for valid UUIDs.
-    /// Synchronously returns either an error or the device response.
-    fn read_by_type(&self, characteristic: &Characteristic,
-                    uuid: UUID) -> Result<Vec<u8>>;
-
-    /// Enables either notify or indicate (depending on support) for the specified characteristic.
-    /// This is a synchronous call.
-    fn subscribe(&self, characteristic: &Characteristic) -> Result<()>;
-
-    /// Disables either notify or indicate (depending on support) for the specified characteristic.
-    /// This is a synchronous call.
-    fn unsubscribe(&self, characteristic: &Characteristic) -> Result<()>;
-
-    /// Registers a handler that will be called when value notification messages are received from
-    /// the device. This method should only be used after a connection has been established. Note
-    /// that the handler will be called in a common thread, so it should not block.
-    fn on_notification(&self, handler: NotificationHandler);
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -264,8 +208,11 @@ pub enum CentralEvent {
 
 pub type EventHandler = Box<Fn(CentralEvent) + Send>;
 
-/// Central is the "client" of BLE. It's able to scan for and establish connections to peripherals.
-pub trait Central<P : Peripheral>: Send + Sync + Clone {
+/// Represents the "Central" device in BLE topology. It listens to advertisement packets from peripherals and can can maintain connections to many peripherals at once.
+// TODO This Central trait has nothing to do with the Peripheral struct/trait.
+// it *should* be constrained to a ConnectedAdapter
+// pub trait Central<C : Peripheral>: Send + Sync + Clone {
+pub trait Central: Send + Sync + Clone {
     /// Registers a function that will receive notifications when events occur for this Central
     /// module. See [`Event`](enum.CentralEvent.html) for the full set of events. Note that the
     /// handler will be called in a common thread, so it should not block.
@@ -281,9 +228,70 @@ pub trait Central<P : Peripheral>: Send + Sync + Clone {
 
     /// Returns the list of [`Peripherals`](trait.Peripheral.html) that have been discovered so far.
     /// Note that this list may contain peripherals that are no longer available.
-    fn peripherals(&self) -> Vec<P>;
+    fn peripherals(&self) -> Vec<PeripheralDescriptor>;
 
     /// Returns a particular [`Peripheral`](trait.Peripheral.html) by its address if it has been
     /// discovered.
-    fn peripheral(&self, address: BDAddr) -> Option<P>;
+    fn peripheral(&self, address: BDAddr) -> Option<PeripheralDescriptor>;
+
+    /// Creates a connection to the device. This is a synchronous operation; if this method returns
+    /// Ok there has been successful connection. Note that peripherals allow only one connection at
+    /// a time. Operations that attempt to communicate with a device will fail until it is connected.
+    fn connect(&self, address: BDAddr) -> Result<()>;
+
+    /// Terminates a connection to the device. This is a synchronous operation.
+    fn disconnect(&self, address: BDAddr) -> Result<()>;
+
+    /// Discovers all characteristics for the device. This is a synchronous operation.
+    fn discover_characteristics(&self, address: BDAddr) -> Result<Vec<Characteristic>>;
+
+    /// Discovers characteristics within the specified range of handles. This is a synchronous
+    /// operation.
+    fn discover_characteristics_in_range(&self, address:BDAddr, start: u16, end: u16) -> Result<Vec<Characteristic>>;
+
+    /// Sends a command (`write-without-response`) to the characteristic. Takes an optional callback
+    /// that will be notified in case of error or when the command has been successfully acked by the
+    /// device.
+    fn command_async(&self, address:BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>);
+
+    /// Sends a command (write without response) to the characteristic. Synchronously returns a
+    /// `Result` with an error set if the command was not accepted by the device.
+    fn command(&self, address:BDAddr, characteristic: &Characteristic, data: &[u8]) -> Result<()>;
+
+    /// Sends a request (write) to the device. Takes an optional callback with either an error if
+    /// the request was not accepted or the response from the device.
+    fn request_async(&self, address:BDAddr, characteristic: &Characteristic,
+                     data: &[u8], handler: Option<RequestCallback>);
+
+    /// Sends a request (write) to the device. Synchronously returns either an error if the request
+    /// was not accepted or the response from the device.
+    fn request(&self, address:BDAddr, characteristic: &Characteristic,
+               data: &[u8]) -> Result<Vec<u8>>;
+
+    /// Sends a read-by-type request to device for the range of handles covered by the
+    /// characteristic and for the specified declaration UUID. See
+    /// [here](https://www.bluetooth.com/specifications/gatt/declarations) for valid UUIDs.
+    /// Takes an optional callback that will be called with an error or the device response.
+    fn read_by_type_async(&self, address:BDAddr, characteristic: &Characteristic,
+                          uuid: UUID, handler: Option<RequestCallback>);
+
+    /// Sends a read-by-type request to device for the range of handles covered by the
+    /// characteristic and for the specified declaration UUID. See
+    /// [here](https://www.bluetooth.com/specifications/gatt/declarations) for valid UUIDs.
+    /// Synchronously returns either an error or the device response.
+    fn read_by_type(&self, address:BDAddr, characteristic: &Characteristic,
+                    uuid: UUID) -> Result<Vec<u8>>;
+
+    /// Enables either notify or indicate (depending on support) for the specified characteristic.
+    /// This is a synchronous call.
+    fn subscribe(&self, address:BDAddr, characteristic: &Characteristic) -> Result<()>;
+
+    /// Disables either notify or indicate (depending on support) for the specified characteristic.
+    /// This is a synchronous call.
+    fn unsubscribe(&self, address:BDAddr, characteristic: &Characteristic) -> Result<()>;
+
+    /// Registers a handler that will be called when value notification messages are received from
+    /// the device. This method should only be used after a connection has been established. Note
+    /// that the handler will be called in a common thread, so it should not block.
+    fn on_notification(&self, address:BDAddr, handler: NotificationHandler);
 }
