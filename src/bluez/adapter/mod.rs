@@ -419,19 +419,10 @@ impl ConnectedAdapter {
         self.peripherals.lock().unwrap().get(&address).unwrap().clone()
     }
 }
-//TODO
+
 impl PeripheralDescriptor {
     pub fn new(d_periph: &DiscoveredPeripheral) -> PeripheralDescriptor {
-        PeripheralDescriptor {
-            address: d_periph.address.clone(),
-            address_type: d_periph.address_type.clone(),
-            local_name: Some(d_periph.local_name.clone()),
-            characteristics: d_periph.characteristics.clone(),
-            is_connected: d_periph.is_connected,
-            tx_power_level: Some(d_periph.tx_power_level),
-            manufacturer_data: Some(d_periph.manufacturer_data.clone()),
-            discovery_count: d_periph.discovery_count,
-        }
+        d_periph.get_descriptor()
     }
 }
 

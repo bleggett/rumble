@@ -1,6 +1,6 @@
 use ::Result;
 
-use api::{Characteristic, CharPropFlags, Callback, BDAddr};
+use api::{Characteristic, CharPropFlags, Callback, BDAddr, PeripheralDescriptor};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -45,18 +45,18 @@ impl Clone for L2CapOptions {
 #[derive(Clone)]
 //TODO fix pub fields
 pub struct DiscoveredPeripheral {
-    pub c_adapter: ConnectedAdapter,
+    c_adapter: ConnectedAdapter,
     pub address: BDAddr,
-    pub address_type: AddressType,
-    pub local_name: String,
-    pub tx_power_level: i8,
-    pub manufacturer_data: Vec<u8>,
-    pub discovery_count: u32,
-    pub has_scan_response: bool,
-    pub is_connected: bool,
-    pub characteristics: BTreeSet<Characteristic>,
+    address_type: AddressType,
+    local_name: String,
+    tx_power_level: i8,
+    manufacturer_data: Vec<u8>,
+    discovery_count: u32,
+    has_scan_response: bool,
+    is_connected: bool,
+    characteristics: BTreeSet<Characteristic>,
     pub stream: Arc<RwLock<Option<ACLStream>>>,
-    pub connection_tx: Arc<Mutex<Sender<u16>>>,
+    connection_tx: Arc<Mutex<Sender<u16>>>,
     pub connection_rx: Arc<Mutex<Receiver<u16>>>,
     pub message_queue: Arc<Mutex<VecDeque<ACLData>>>,
 }
@@ -281,5 +281,18 @@ impl DiscoveredPeripheral {
 
         // TODO: this copy is avoidable
         (*done).clone().unwrap()
+    }
+
+    pub fn get_descriptor(&self) -> PeripheralDescriptor {
+        PeripheralDescriptor {
+            address: self.address.clone(),
+            address_type: self.address_type.clone(),
+            local_name: Some(self.local_name.clone()),
+            characteristics: self.characteristics.clone(),
+            is_connected: self.is_connected,
+            tx_power_level: Some(self.tx_power_level),
+            manufacturer_data: Some(self.manufacturer_data.clone()),
+            discovery_count: self.discovery_count,
+        }
     }
 }
