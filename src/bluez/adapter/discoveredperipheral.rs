@@ -4,7 +4,6 @@ use api::{Characteristic, CharPropFlags, Callback, BDAddr};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::default::Default;
 use bluez::adapter::acl_stream::{ACLStream};
 use bluez::adapter::ConnectedAdapter;
 use bluez::constants::*;
@@ -97,7 +96,12 @@ impl DiscoveredPeripheral {
         }
     }
 
-    pub fn handle_device_message(&self, message: &hci::Message) {
+    pub fn update_characteristics(&mut self, newset: Vec<Characteristic>) {
+
+        newset.iter().for_each(|c| { self.characteristics.insert(c.clone());});
+    }
+
+    pub fn handle_device_message(&mut self, message: &hci::Message) {
         match message {
             &hci::Message::LEAdvertisingReport(ref info) => {
                 assert_eq!(self.address, info.bdaddr, "received message for wrong device");

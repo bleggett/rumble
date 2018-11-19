@@ -8,7 +8,7 @@ use std::mem::size_of;
 use nom::IResult;
 use bytes::{BytesMut, BufMut};
 
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashSet, HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +26,6 @@ use bluez::adapter::acl_stream::{ACLStream};
 use bluez::adapter::discoveredperipheral::DiscoveredPeripheral;
 use bluez::constants::*;
 use api::EventHandler;
-
 
 #[derive(Copy, Debug)]
 #[repr(C)]
@@ -337,13 +336,13 @@ impl ConnectedAdapter {
                 info!("connected to {:?}", info);
                 let address = info.bdaddr.clone();
                 let handle = info.handle.clone();
-                match self.get_discovered_peripheral(address) {
-                    Some(peripheral) => {
-                        peripheral.handle_device_message(&hci::Message::LEConnComplete(info))
-                    }
+                let mut peripheral = self.get_discovered_peripheral(address);
+
+                    // Some(peripheral) => {
+                peripheral.handle_device_message(&hci::Message::LEConnComplete(info));
+                    // }
                     // todo: there's probably a better way to handle this case
-                    None => warn!("Got connection for unknown device {}", info.bdaddr)
-                }
+                    // None => warn!("Got connection for unknown device {}", info.bdaddr)
 
                 let mut handles = self.handle_map.lock().unwrap();
                 handles.insert(handle, address);
@@ -355,9 +354,9 @@ impl ConnectedAdapter {
 
                 // TODO this is a bit risky from a deadlock perspective (note mutexes are not
                 // reentrant in rust!)
-                let peripherals = self.peripherals.lock().unwrap();
+                let mut peripherals = self.peripherals.lock().unwrap();
 
-                for peripheral in peripherals.values() {
+                for peripheral in peripherals.values_mut() {
                     // we don't know the handler => device mapping, so send to all and let them filter
                     peripheral.handle_device_message(&message);
                 }
@@ -366,10 +365,8 @@ impl ConnectedAdapter {
                 let mut handles = self.handle_map.lock().unwrap();
                 match handles.remove(&handle) {
                     Some(addr) => {
-                        match self.get_discovered_peripheral(addr) {
-                            Some(peripheral) => peripheral.handle_device_message(&message),
-                            None => warn!("got disconnect for unknown device {}", addr),
-                        };
+                        let mut peripheral = self.get_discovered_peripheral(addr);
+                        peripheral.handle_device_message(&message);
                         self.emit(CentralEvent::DeviceDisconnected(addr));
                     }
                     None => {
@@ -414,23 +411,25 @@ impl ConnectedAdapter {
     }
 
 
-    /// Returns a DiscoveredPeripheral instance, for internal use.
-    fn get_discovered_peripheral(&self, address: BDAddr) -> Option<&DiscoveredPeripheral>{
-        let l = self.peripherals.lock().unwrap();
-        l.get(&address)
+
+    fn get_discovered_peripheral(&self, address: BDAddr) -> DiscoveredPeripheral {
+        // let l = self.peripherals.lock();
+        // let res = l.unwrap();
+        // MutexGuardRef::new(self.peripherals.get_mut().unwrap())
+        self.peripherals.lock().unwrap().get(&address).unwrap().clone()
     }
 }
 //TODO
 impl PeripheralDescriptor {
-    pub fn new(d_periph: DiscoveredPeripheral) -> PeripheralDescriptor {
+    pub fn new(d_periph: &DiscoveredPeripheral) -> PeripheralDescriptor {
         PeripheralDescriptor {
-            address: d_periph.address,
-            address_type: d_periph.address_type,
-            local_name: Some(d_periph.local_name),
-            characteristics: d_periph.characteristics,
+            address: d_periph.address.clone(),
+            address_type: d_periph.address_type.clone(),
+            local_name: Some(d_periph.local_name.clone()),
+            characteristics: d_periph.characteristics.clone(),
             is_connected: d_periph.is_connected,
             tx_power_level: Some(d_periph.tx_power_level),
-            manufacturer_data: Some(d_periph.manufacturer_data),
+            manufacturer_data: Some(d_periph.manufacturer_data.clone()),
             discovery_count: d_periph.discovery_count,
         }
     }
@@ -456,16 +455,16 @@ impl Central for ConnectedAdapter {
 
     fn peripherals(&self) -> Vec<PeripheralDescriptor> {
         let l = self.peripherals.lock().unwrap();
-        l.values().map(|p| PeripheralDescriptor::new(*p)).collect()
+        l.values().map(|p| PeripheralDescriptor::new(p)).collect()
     }
 
     fn peripheral(&self, address: BDAddr) -> Option<PeripheralDescriptor> {
         let l = self.peripherals.lock().unwrap();
-        l.get(&address).map(|p| PeripheralDescriptor::new(*p))
+        l.get(&address).map(|p| PeripheralDescriptor::new(p))
     }
 
     fn connect(&self, address: BDAddr) -> Result<()> {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         // take lock on stream
         let mut stream = peripheral.stream.write().unwrap();
 
@@ -555,7 +554,7 @@ impl Central for ConnectedAdapter {
     }
 
     fn disconnect(&self, address: BDAddr) -> Result<()> {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         let mut l = peripheral.stream.write().unwrap();
 
         if l.is_none() {
@@ -580,7 +579,7 @@ impl Central for ConnectedAdapter {
     }
 
     fn discover_characteristics_in_range(&self, address: BDAddr, start: u16, end: u16) -> Result<Vec<Characteristic>> {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         let mut results = vec![];
         let mut start = start;
         loop {
@@ -628,14 +627,15 @@ impl Central for ConnectedAdapter {
         }
 
         // update our cache
-
-        results.iter().for_each(|c| { peripheral.characteristics.insert(c.clone());});
+        if let Entry::Occupied(mut o) = self.peripherals.lock().unwrap().entry(address) {
+            o.get_mut().update_characteristics(results.clone());
+        }
 
         Ok(results)
     }
 
     fn command_async(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>) {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         let l = peripheral.stream.read().unwrap();
 
         match l.as_ref() {
@@ -660,7 +660,7 @@ impl Central for ConnectedAdapter {
     }
 
     fn request_async(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<RequestCallback>) {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         peripheral.request_by_handle(characteristic.value_handle, data, handler);
     }
 
@@ -672,7 +672,7 @@ impl Central for ConnectedAdapter {
 
     fn read_by_type_async(&self, address: BDAddr, characteristic: &Characteristic, uuid: UUID,
                           handler: Option<RequestCallback>) {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         let mut buf = att::read_by_type_req(characteristic.start_handle, characteristic.end_handle, uuid);
         peripheral.request_raw_async(&mut buf, handler);
     }
@@ -684,17 +684,17 @@ impl Central for ConnectedAdapter {
     }
 
     fn subscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         peripheral.notify(characteristic, true)
     }
 
     fn unsubscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
         peripheral.notify(characteristic, false)
     }
 
     fn on_notification(&self, address: BDAddr, handler: NotificationHandler) {
-        let peripheral = self.get_discovered_peripheral(address).unwrap();
+        let peripheral = self.get_discovered_peripheral(address);
 
         // TODO handle the disconnected case better
         let l = peripheral.stream.read().unwrap();
