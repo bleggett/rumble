@@ -209,9 +209,6 @@ pub enum CentralEvent {
 pub type EventHandler = Box<Fn(CentralEvent) + Send>;
 
 /// Represents the "Central" device in BLE topology. It listens to advertisement packets from peripherals and can can maintain connections to many peripherals at once.
-// TODO This Central trait has nothing to do with the Peripheral struct/trait.
-// it *should* be constrained to a ConnectedAdapter
-// pub trait Central<C : Peripheral>: Send + Sync + Clone {
 pub trait Central: Send + Sync + Clone {
     /// Registers a function that will receive notifications when events occur for this Central
     /// module. See [`Event`](enum.CentralEvent.html) for the full set of events. Note that the

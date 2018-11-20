@@ -1,31 +1,54 @@
 use ::Result;
-
-use api::{Characteristic, CharPropFlags, Callback, BDAddr, PeripheralDescriptor};
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::sync::Mutex;
-use bluez::adapter::acl_stream::{ACLStream};
-use bluez::adapter::ConnectedAdapter;
-use bluez::constants::*;
 use ::Error;
-use bluez::protocol::hci;
-use api::AddressType;
-use std::sync::mpsc::Sender;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::channel;
-use bytes::{BytesMut, BufMut};
-use bluez::protocol::att;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::fmt;
-use std::sync::RwLock;
-use std::collections::VecDeque;
-use bluez::protocol::hci::ACLData;
-use std::sync::Condvar;
-use api::RequestCallback;
-use api::UUID::B16;
-use std::fmt::Display;
 
+use api::{
+    AddressType,
+    Characteristic,
+    CharPropFlags,
+    BDAddr,
+    PeripheralDescriptor,
+    CommandCallback,
+    NotificationHandler,
+    Central,
+    RequestCallback,
+    UUID::B16
+};
+
+use std::collections::{VecDeque, BTreeSet};
+use std::mem::size_of;
+use std::{fmt, fmt::Display, fmt::Debug, fmt::Formatter};
+use std::time::Duration;
+use std::sync::{
+    Arc,
+    Mutex,
+    RwLock,
+    mpsc,
+    mpsc::channel,
+    mpsc::Sender,
+    mpsc::Receiver,
+    atomic::Ordering
+};
+
+use bytes::{BytesMut, BufMut};
+
+use bluez::adapter::{ConnectedAdapter, acl_stream::ACLStream, util};
+use bluez::protocol::{hci, att, hci::ACLData};
+use bluez::util::handle_error;
+use bluez::constants::*;
+
+#[derive(Copy, Debug)]
+#[repr(C)]
+struct SockaddrL2 {
+    l2_family: libc::sa_family_t,
+    l2_psm: u16,
+    l2_bdaddr: BDAddr,
+    l2_cid: u16,
+    l2_bdaddr_type: u32,
+}
+
+impl Clone for SockaddrL2 {
+    fn clone(&self) -> Self { *self }
+}
 
 #[derive(Copy, Debug, Default)]
 #[repr(C)]
@@ -43,7 +66,6 @@ impl Clone for L2CapOptions {
 }
 
 #[derive(Clone)]
-//TODO fix pub fields
 pub struct DiscoveredPeripheral {
     c_adapter: ConnectedAdapter,
     pub address: BDAddr,
@@ -55,10 +77,10 @@ pub struct DiscoveredPeripheral {
     has_scan_response: bool,
     is_connected: bool,
     characteristics: BTreeSet<Characteristic>,
-    pub stream: Arc<RwLock<Option<ACLStream>>>,
+    stream: Arc<RwLock<Option<ACLStream>>>,
     connection_tx: Arc<Mutex<Sender<u16>>>,
-    pub connection_rx: Arc<Mutex<Receiver<u16>>>,
-    pub message_queue: Arc<Mutex<VecDeque<ACLData>>>,
+    connection_rx: Arc<Mutex<Receiver<u16>>>,
+    message_queue: Arc<Mutex<VecDeque<ACLData>>>,
 }
 
 impl Display for DiscoveredPeripheral {
@@ -193,14 +215,13 @@ impl DiscoveredPeripheral {
     }
 
     pub fn request_raw(&self, data: &mut [u8]) -> Result<Vec<u8>> {
-        DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
+        util::wait_until_done(|done: RequestCallback| {
             // TODO this copy can be avoided
             let mut data = data.to_vec();
             self.request_raw_async(&mut data, Some(done));
         })
     }
 
-    //TODO fix need to be public
     pub fn request_by_handle(&self, handle: u16, data: &[u8], handler: Option<RequestCallback>) {
         let mut buf = BytesMut::with_capacity(3 + data.len());
         buf.put_u8(ATT_OP_WRITE_REQ);
@@ -239,7 +260,7 @@ impl DiscoveredPeripheral {
 
                 let mut value_buf = BytesMut::with_capacity(2);
                 value_buf.put_u16_le(value);
-                let data = DiscoveredPeripheral::wait_until_done(|done: RequestCallback| {
+                let data = util::wait_until_done(|done: RequestCallback| {
                     self.request_by_handle(resp.handle, &*value_buf, Some(done))
                 })?;
 
@@ -258,29 +279,144 @@ impl DiscoveredPeripheral {
         };
     }
 
-    //TODO fix pub methods
-    pub fn wait_until_done<F, T: Clone + Send + 'static>(operation: F) -> Result<T> where F: for<'a> Fn(Callback<T>) {
-        let pair = Arc::new((Mutex::new(None), Condvar::new()));
-        let pair2 = pair.clone();
-        let on_finish = Box::new(move|result: Result<T>| {
-            let &(ref lock, ref cvar) = &*pair2;
-            let mut done = lock.lock().unwrap();
-            *done = Some(result.clone());
-            cvar.notify_one();
-        });
+    pub fn connect(&self) -> Result<()> {
+        let mut stream = self.stream.write().unwrap();
 
-        operation(on_finish);
-
-        // wait until we're done
-        let &(ref lock, ref cvar) = &*pair;
-
-        let mut done = lock.lock().unwrap();
-        while (*done).is_none() {
-            done = cvar.wait(done).unwrap();
+        if stream.is_some() {
+            // we're already connected, just return
+            return Ok(());
         }
 
-        // TODO: this copy is avoidable
-        (*done).clone().unwrap()
+        // create the socket on which we'll communicate with the device
+        let fd = handle_error(unsafe {
+            libc::socket(libc::AF_BLUETOOTH, libc::SOCK_SEQPACKET, 0)
+        })?;
+        debug!("created socket {} to communicate with device", fd);
+
+        let local_addr = SockaddrL2 {
+            l2_family: libc::AF_BLUETOOTH as libc::sa_family_t,
+            l2_psm: 0,
+            l2_bdaddr: self.c_adapter.adapter.addr,
+            l2_cid: ATT_CID,
+            l2_bdaddr_type: self.c_adapter.adapter.typ.num() as u32,
+        };
+
+        // bind to the socket
+        handle_error(unsafe {
+            libc::bind(fd, &local_addr as *const SockaddrL2 as *const libc::sockaddr,
+                       size_of::<SockaddrL2>() as u32)
+        })?;
+        debug!("bound to socket {}", fd);
+
+        // configure it as a bluetooth socket
+        let mut opt = [1u8, 0];
+        handle_error(unsafe {
+            libc::setsockopt(fd, libc::SOL_BLUETOOTH, 4, opt.as_mut_ptr() as *mut libc::c_void, 2)
+        })?;
+        debug!("configured socket {}", fd);
+
+        let addr = SockaddrL2 {
+            l2_family: libc::AF_BLUETOOTH as u16,
+            l2_psm: 0,
+            l2_bdaddr: self.address,
+            l2_cid: ATT_CID,
+            l2_bdaddr_type: 1,
+        };
+
+        // connect to the device
+        handle_error(unsafe {
+            libc::connect(fd, &addr as *const SockaddrL2 as *const libc::sockaddr,
+                          size_of::<SockaddrL2>() as u32)
+        }).unwrap();
+        debug!("connected to device {} over socket {}", self.address, fd);
+
+        //TODO not a fan of reaching back up into the parent adapter to do this
+        // restart scanning if we were already, as connecting to a device seems to kill it
+        if self.c_adapter.scan_enabled.load(Ordering::Relaxed) {
+            self.c_adapter.start_scan()?;
+            debug!("restarted scanning");
+        }
+
+        // wait until we get the connection notice
+        let timeout = Duration::from_secs(20);
+        match self.connection_rx.lock().unwrap().recv_timeout(timeout) {
+            Ok(handle) => {
+                // create the acl stream that will communicate with the device
+                let s = ACLStream::new(self.c_adapter.adapter.clone(),
+                                       self.address, handle, fd);
+
+                // replay missed messages
+                let mut queue = self.message_queue.lock().unwrap();
+                while !queue.is_empty() {
+                    let msg = queue.pop_back().unwrap();
+                    if s.handle == msg.handle {
+                        s.receive(&msg);
+                    }
+                }
+
+                *stream = Some(s);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(Error::TimedOut(timeout.clone()));
+            }
+            err => {
+                // unexpected error
+                err.unwrap();
+            }
+        };
+
+        Ok(())
+    }
+
+    pub fn disconnect(&self) -> Result<()> {
+        let mut l = self.stream.write().unwrap();
+
+        if l.is_none() {
+            // we're already disconnected
+            return Ok(());
+        }
+
+        let handle = l.as_ref().unwrap().handle;
+
+        let mut data = BytesMut::with_capacity(3);
+        data.put_u16_le(handle);
+        data.put_u8(HCI_OE_USER_ENDED_CONNECTION);
+        let mut buf = hci::hci_command(DISCONNECT_CMD, &*data);
+        self.c_adapter.write(&mut *buf)?;
+
+        *l = None;
+        Ok(())
+    }
+
+    pub fn write_command(&self, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>) {
+        let l = self.stream.read().unwrap();
+
+        match l.as_ref() {
+            Some(stream) => {
+                let mut buf = BytesMut::with_capacity(3 + data.len());
+                buf.put_u8(ATT_OP_WRITE_CMD);
+                buf.put_u16_le(characteristic.value_handle);
+                buf.put(data);
+
+                stream.write_cmd(&mut *buf, handler);
+            }
+            None => {
+                handler.iter().for_each(|h| h(Err(Error::NotConnected)));
+            }
+        }
+    }
+
+    pub fn add_notification(&self, handler: NotificationHandler) {
+        // TODO handle the disconnected case better
+        let l = self.stream.read().unwrap();
+        match l.as_ref() {
+            Some(stream) => {
+                stream.on_notification(handler);
+            }
+            None => {
+                error!("tried to subscribe to notifications, but not yet connected")
+            }
+        }
     }
 
     pub fn get_descriptor(&self) -> PeripheralDescriptor {
