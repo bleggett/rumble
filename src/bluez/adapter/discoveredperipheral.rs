@@ -64,7 +64,6 @@ pub struct DiscoveredPeripheral {
     manufacturer_data: Vec<u8>,
     discovery_count: u32,
     has_scan_response: bool,
-    is_connected: bool,
     characteristics: BTreeSet<Characteristic>,
     stream: Arc<RwLock<Option<ACLStream>>>,
     connection_tx: Arc<Mutex<Sender<u16>>>,
@@ -74,14 +73,22 @@ pub struct DiscoveredPeripheral {
 
 impl Display for DiscoveredPeripheral {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let connected = if self.is_connected { " connected" } else { "" };
+        let connected = if self.is_connected() {
+            " connected"
+        } else {
+            ""
+        };
         write!(f, "{} {}{}", self.address, self.local_name, connected)
     }
 }
 
 impl Debug for DiscoveredPeripheral {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let connected = if self.is_connected { " connected" } else { "" };
+        let connected = if self.is_connected() {
+            " connected"
+        } else {
+            ""
+        };
         write!(
             f,
             "{} characteristics: {:?} {}",
@@ -102,7 +109,6 @@ impl DiscoveredPeripheral {
             manufacturer_data: Vec::new(),
             discovery_count: 0,
             has_scan_response: false,
-            is_connected: false,
             characteristics: BTreeSet::new(),
             stream: Arc::new(RwLock::new(Option::None)),
             connection_tx: Arc::new(Mutex::new(connection_tx)),
@@ -410,6 +416,11 @@ impl DiscoveredPeripheral {
         Ok(())
     }
 
+    fn is_connected(&self) -> bool {
+        let l = self.stream.try_read();
+        return l.is_ok() && l.unwrap().is_some();
+    }
+
     pub fn write_command(
         &self,
         characteristic: &Characteristic,
@@ -450,7 +461,7 @@ impl DiscoveredPeripheral {
             address_type: self.address_type.clone(),
             local_name: Some(self.local_name.clone()),
             characteristics: self.characteristics.clone(),
-            is_connected: self.is_connected,
+            is_connected: self.is_connected(),
             tx_power_level: Some(self.tx_power_level),
             manufacturer_data: Some(self.manufacturer_data.clone()),
             discovery_count: self.discovery_count,
