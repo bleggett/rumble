@@ -1,13 +1,13 @@
 use std::sync::Mutex;
 
 use libc;
-use libc::{c_void, SOCK_RAW, AF_BLUETOOTH};
+use libc::{c_void, AF_BLUETOOTH, SOCK_RAW};
 use std::mem;
 
-use bluez::util::handle_error;
 use bluez::adapter::{Adapter, ConnectedAdapter};
 use bluez::constants::*;
-use ::Result;
+use bluez::util::handle_error;
+use Result;
 
 struct HciIoctls {}
 
@@ -27,7 +27,9 @@ struct HCIDevReq {
 }
 
 impl Clone for HCIDevReq {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 #[derive(Copy)]
@@ -38,14 +40,15 @@ struct HCIDevListReq {
 }
 
 impl Clone for HCIDevListReq {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
-
 
 /// This struct is the interface into BlueZ. It can be used to list, manage, and connect to bluetooth
 /// adapters.
 pub struct Manager {
-    ctl_fd: Mutex<i32>
+    ctl_fd: Mutex<i32>,
 }
 
 impl Manager {
@@ -53,7 +56,9 @@ impl Manager {
     /// created by your application.
     pub fn new() -> Result<Manager> {
         let fd = handle_error(unsafe { libc::socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI) })?;
-        Ok(Manager { ctl_fd: Mutex::new(fd) })
+        Ok(Manager {
+            ctl_fd: Mutex::new(fd),
+        })
     }
 
     /// Returns the list of adapters available on the system.
@@ -62,8 +67,7 @@ impl Manager {
 
         let ctl = self.ctl_fd.lock().unwrap();
 
-        let mut buf = vec![0u8; 16usize *
-            mem::size_of::<HCIDevReq>() + mem::size_of::<u16>()];
+        let mut buf = vec![0u8; 16usize * mem::size_of::<HCIDevReq>() + mem::size_of::<u16>()];
         let dl: *mut HCIDevListReq = buf.as_mut_ptr() as (*mut HCIDevListReq);
         let dr: *mut HCIDevReq;
 
@@ -71,12 +75,14 @@ impl Manager {
             (*dl).dev_num = 16u16;
             dr = (*dl).dev_reqs.as_mut_ptr();
 
-            handle_error(
-                libc::ioctl(*ctl, HCI_GET_DEV_LIST_MAGIC as libc::c_ulong, dl as (*mut c_void)))?;
+            handle_error(libc::ioctl(
+                *ctl,
+                HCI_GET_DEV_LIST_MAGIC as libc::c_ulong,
+                dl as (*mut c_void),
+            ))?;
 
             for i in 0..(*dl).dev_num {
-                result.push(Adapter::from_dev_id(*ctl,
-                                                 (*dr.offset(i as isize)).dev_id)?);
+                result.push(Adapter::from_dev_id(*ctl, (*dr.offset(i as isize)).dev_id)?);
             }
         }
 

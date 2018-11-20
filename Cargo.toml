@@ -1,6 +1,6 @@
 [package]
 name = "rumble"
-version = "0.2.1"
+version = "1.0.0"
 authors = ["Micah Wylde <micah@micahw.com>"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/mwylde/rumble"
@@ -20,7 +20,7 @@ libc = "0.2.33"
 nix = "0.9.0"
 bytes = "0.4"
 num = "0.1.41"
-log = "0.3.8"
+log = "0.4.6"
 enum_primitive = "0.1.1"
 bitflags = "1.0.1"
 failure = "0.1.1"

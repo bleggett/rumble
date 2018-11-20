@@ -77,7 +77,8 @@ extern crate log;
 extern crate nix;
 
 extern crate bytes;
-#[macro_use] extern crate enum_primitive;
+#[macro_use]
+extern crate enum_primitive;
 extern crate num;
 
 #[macro_use]
@@ -93,8 +94,8 @@ extern crate failure_derive;
 use std::result;
 use std::time::Duration;
 
-pub mod bluez;
 pub mod api;
+pub mod bluez;
 
 #[derive(Debug, Fail, Clone)]
 pub enum Error {

@@ -459,6 +459,7 @@ impl Central for ConnectedAdapter {
     }
 
     fn connect(&self, address: BDAddr) -> Result<()> {
+        debug!("Connecting to {}", address);
         match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().connect(),
             Entry::Vacant(_) => Err(Error::DeviceNotFound),

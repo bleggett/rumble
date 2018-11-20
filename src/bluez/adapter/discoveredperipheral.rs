@@ -292,6 +292,10 @@ impl DiscoveredPeripheral {
 
         if stream.is_some() {
             // we're already connected, just return
+            debug!(
+                "Peripheral {} is already connected, skipping...",
+                self.address
+            );
             return Ok(());
         }
 
