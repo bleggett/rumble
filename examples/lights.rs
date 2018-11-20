@@ -1,11 +1,11 @@
-extern crate rumble;
 extern crate rand;
+extern crate rumble;
 
+use rand::{thread_rng, Rng};
+use rumble::api::{Central, UUID};
+use rumble::bluez::manager::Manager;
 use std::thread;
 use std::time::Duration;
-use rand::{Rng, thread_rng};
-use rumble::bluez::manager::Manager;
-use rumble::api::{UUID, Central, Peripheral};
 
 pub fn main() {
     let manager = Manager::new().unwrap();
@@ -28,25 +28,29 @@ pub fn main() {
     thread::sleep(Duration::from_secs(2));
 
     // find the device we're interested in
-    let light = central.peripherals().into_iter()
-        .find(|p| p.properties().local_name.iter()
-            .any(|name| name.contains("LEDBlue"))).unwrap();
+    let light = central
+        .peripherals()
+        .into_iter()
+        .find(|p| p.local_name.as_ref().unwrap().contains("LEDBlue"))
+        .unwrap();
 
     // connect to the device
-    light.connect().unwrap();
+    central.connect(light.address).unwrap();
 
     // discover characteristics
-    light.discover_characteristics().unwrap();
+    central.discover_characteristics(light.address).unwrap();
 
     // find the characteristic we want
-    let chars = light.characteristics();
+    let chars = light.characteristics;
     let cmd_char = chars.iter().find(|c| c.uuid == UUID::B16(0xFFE9)).unwrap();
 
     // dance party
     let mut rng = thread_rng();
     for _ in 0..20 {
         let color_cmd = vec![0x56, rng.gen(), rng.gen(), rng.gen(), 0x00, 0xF0, 0xAA];
-        light.command(&cmd_char, &color_cmd).unwrap();
+        central
+            .command(light.address, &cmd_char, &color_cmd)
+            .unwrap();
         thread::sleep(Duration::from_millis(200));
     }
 }
