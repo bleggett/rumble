@@ -244,18 +244,14 @@ impl DiscoveredPeripheral {
 
                 let mut value = resp.value;
 
-                if enable {
-                    if use_notify {
+                if enable && use_notify {
                         value |= 0x0001;
-                    } else if use_indicate {
-                        value |= 0x0002;
-                    }
-                } else {
-                    if use_notify {
-                        value &= 0xFFFE;
-                    } else if use_indicate {
-                        value &= 0xFFFD;
-                    }
+                } else if enable && use_indicate {
+                    value |= 0x0002;
+                } else if use_notify {
+                    value &= 0xFFFE;
+                } else if use_indicate {
+                    value &= 0xFFFD;
                 }
 
                 let mut value_buf = BytesMut::with_capacity(2);
@@ -266,17 +262,17 @@ impl DiscoveredPeripheral {
 
                 if data.len() > 0 && data[0] == ATT_OP_WRITE_RESP {
                     debug!("Got response from notify: {:?}", data);
-                    return Ok(());
+                    Ok(())
                 } else {
                     warn!("Unexpected notify response: {:?}", data);
-                    return Err(Error::Other("Failed to set notify".to_string()));
+                    Err(Error::Other("Failed to set notify".to_string()))
                 }
             }
             Err(err) => {
                 debug!("failed to parse notify response: {:?}", err);
-                return Err(Error::Other("failed to get characteristic state".to_string()));
+                Err(Error::Other("failed to get characteristic state".to_string()))
             }
-        };
+        }
     }
 
     pub fn connect(&self) -> Result<()> {

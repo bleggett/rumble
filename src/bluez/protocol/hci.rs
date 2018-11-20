@@ -345,9 +345,9 @@ enum_from_primitive! {
 #[derive(Debug, PartialEq)]
 #[repr(u8)]
 enum EventType {
-    HCICommandPkt = 1,
-    HCIAclDataPkt = 2,
-    HCIEventPkt = 4,
+    HCICommand = 1,
+    HCIAclData = 2,
+    HCIEvent = 4,
 }
 }
 
@@ -668,7 +668,7 @@ fn hci_event_pkt(i: &[u8]) -> IResult<&[u8], Message> {
         },
         DisconnComplete => try_parse!(data, disconnect_complete).1,
         _ => {
-            warn!("Unhandled HCIEventPkt subtype {:?}", sub_type);
+            warn!("Unhandled HCIEvent subtype {:?}", sub_type);
             return IResult::Error(Err::Code(ErrorKind::Custom(4)))
         }
     };
@@ -735,9 +735,9 @@ pub fn message(i: &[u8]) -> IResult<&[u8], Message> {
 
     let (i, typ) = try_parse!(i, map_opt!(le_u8, |b| EventType::from_u8(b)));
     match typ {
-        HCICommandPkt => hci_command_pkt(i), // 1
-        HCIAclDataPkt => hci_acldata_pkt(i), // 2
-        HCIEventPkt => hci_event_pkt(i),     // 4
+        HCICommand => hci_command_pkt(i), // 1
+        HCIAclData => hci_acldata_pkt(i), // 2
+        HCIEvent => hci_event_pkt(i),     // 4
     }
 }
 

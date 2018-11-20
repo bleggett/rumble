@@ -15,14 +15,12 @@ use std::thread;
 
 use ::Result;
 use ::Error;
-use api::{CentralEvent, Characteristic, BDAddr, Central, CommandCallback, RequestCallback, NotificationHandler, UUID, PeripheralDescriptor};
+use api::{CentralEvent, EventHandler, Characteristic, BDAddr, Central, CommandCallback, RequestCallback, NotificationHandler, UUID, PeripheralDescriptor};
 
 use bluez::util::handle_error;
-use bluez::protocol::hci;
-use bluez::protocol::att;
+use bluez::protocol::{hci, att};
 use bluez::adapter::discoveredperipheral::DiscoveredPeripheral;
 use bluez::constants::*;
-use api::EventHandler;
 
 #[derive(Copy, Debug)]
 #[repr(C)]
@@ -393,7 +391,6 @@ impl ConnectedAdapter {
         let mut buf = hci::hci_command(LE_SET_SCAN_ENABLE_CMD, &*data);
         self.write(&mut *buf)
     }
-
 }
 
 impl PeripheralDescriptor {
@@ -428,19 +425,17 @@ impl Central for ConnectedAdapter {
     }
 
     fn connect(&self, address: BDAddr) -> Result<()> {
-        let result = match self.peripherals.lock().unwrap().entry(address) {
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().connect(),
             Entry::Vacant(_) => Err(Error::DeviceNotFound)
-        };
-        result
+        }
     }
 
     fn disconnect(&self, address: BDAddr) -> Result<()> {
-        let result = match self.peripherals.lock().unwrap().entry(address) {
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().disconnect(),
             Entry::Vacant(_) => Err(Error::DeviceNotFound)
-        };
-        result
+        }
     }
 
     fn discover_characteristics(&self, address: BDAddr) -> Result<Vec<Characteristic>> {
@@ -448,7 +443,6 @@ impl Central for ConnectedAdapter {
     }
 
     fn discover_characteristics_in_range(&self, address: BDAddr, start: u16, end: u16) -> Result<Vec<Characteristic>> {
-
         let mut results = vec![];
         let mut start = start;
         loop {
@@ -546,19 +540,17 @@ impl Central for ConnectedAdapter {
     }
 
     fn subscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
-        let result = match self.peripherals.lock().unwrap().entry(address) {
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().notify(characteristic, true),
             Entry::Vacant(_) => Err(Error::DeviceNotFound)
-        };
-        result
+        }
     }
 
     fn unsubscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
-        let result = match self.peripherals.lock().unwrap().entry(address) {
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().notify(characteristic, false),
             Entry::Vacant(_) => Err(Error::DeviceNotFound)
-        };
-        result
+        }
     }
 
     fn on_notification(&self, address: BDAddr, handler: NotificationHandler) {
