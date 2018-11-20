@@ -1,40 +1,25 @@
-use ::Result;
-use ::Error;
+use Error;
+use Result;
 
 use api::{
-    AddressType,
-    Characteristic,
-    CharPropFlags,
-    BDAddr,
-    PeripheralDescriptor,
-    CommandCallback,
-    NotificationHandler,
-    Central,
-    RequestCallback,
-    UUID::B16
+    AddressType, BDAddr, Central, CharPropFlags, Characteristic, CommandCallback,
+    NotificationHandler, PeripheralDescriptor, RequestCallback, UUID::B16,
 };
 
-use std::collections::{VecDeque, BTreeSet};
+use std::collections::{BTreeSet, VecDeque};
 use std::mem::size_of;
-use std::{fmt, fmt::Display, fmt::Debug, fmt::Formatter};
-use std::time::Duration;
 use std::sync::{
-    Arc,
-    Mutex,
-    RwLock,
-    mpsc,
-    mpsc::channel,
-    mpsc::Sender,
-    mpsc::Receiver,
-    atomic::Ordering
+    atomic::Ordering, mpsc, mpsc::channel, mpsc::Receiver, mpsc::Sender, Arc, Mutex, RwLock,
 };
+use std::time::Duration;
+use std::{fmt, fmt::Debug, fmt::Display, fmt::Formatter};
 
-use bytes::{BytesMut, BufMut};
+use bytes::{BufMut, BytesMut};
 
-use bluez::adapter::{ConnectedAdapter, acl_stream::ACLStream, util};
-use bluez::protocol::{hci, att, hci::ACLData};
-use bluez::util::handle_error;
+use bluez::adapter::{acl_stream::ACLStream, util, ConnectedAdapter};
 use bluez::constants::*;
+use bluez::protocol::{att, hci, hci::ACLData};
+use bluez::util::handle_error;
 
 #[derive(Copy, Debug)]
 #[repr(C)]
@@ -47,7 +32,9 @@ struct SockaddrL2 {
 }
 
 impl Clone for SockaddrL2 {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 #[derive(Copy, Debug, Default)]
@@ -57,12 +44,14 @@ struct L2CapOptions {
     imtu: u16,
     flush_to: u16,
     mode: u8,
-    fcs : u8,
+    fcs: u8,
     max_tx: u8,
     txwin_size: u16,
 }
 impl Clone for L2CapOptions {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 #[derive(Clone)]
@@ -93,8 +82,11 @@ impl Display for DiscoveredPeripheral {
 impl Debug for DiscoveredPeripheral {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let connected = if self.is_connected { " connected" } else { "" };
-        write!(f, "{} characteristics: {:?} {}", self.address,
-               self.characteristics, connected)
+        write!(
+            f,
+            "{} characteristics: {:?} {}",
+            self.address, self.characteristics, connected
+        )
     }
 }
 
@@ -102,7 +94,8 @@ impl DiscoveredPeripheral {
     pub fn new(c_adapter: ConnectedAdapter, address: BDAddr) -> DiscoveredPeripheral {
         let (connection_tx, connection_rx) = channel();
         DiscoveredPeripheral {
-            c_adapter, address,
+            c_adapter,
+            address,
             address_type: AddressType::Random,
             local_name: "(unknown)".into(),
             tx_power_level: 0,
@@ -119,14 +112,18 @@ impl DiscoveredPeripheral {
     }
 
     pub fn update_characteristics(&mut self, newset: Vec<Characteristic>) {
-
-        newset.iter().for_each(|c| { self.characteristics.insert(c.clone());});
+        newset.iter().for_each(|c| {
+            self.characteristics.insert(c.clone());
+        });
     }
 
     pub fn handle_device_message(&mut self, message: &hci::Message) {
         match message {
             &hci::Message::LEAdvertisingReport(ref info) => {
-                assert_eq!(self.address, info.bdaddr, "received message for wrong device");
+                assert_eq!(
+                    self.address, info.bdaddr,
+                    "received message for wrong device"
+                );
                 use bluez::protocol::hci::LEAdvertisingData::*;
 
                 self.discovery_count += 1;
@@ -163,10 +160,17 @@ impl DiscoveredPeripheral {
                 }
             }
             &hci::Message::LEConnComplete(ref info) => {
-                assert_eq!(self.address, info.bdaddr, "received message for wrong device");
+                assert_eq!(
+                    self.address, info.bdaddr,
+                    "received message for wrong device"
+                );
 
                 debug!("got le conn complete {:?}", info);
-                self.connection_tx.lock().unwrap().send(info.handle.clone()).unwrap();
+                self.connection_tx
+                    .lock()
+                    .unwrap()
+                    .send(info.handle.clone())
+                    .unwrap();
             }
             &hci::Message::ACLDataPacket(ref data) => {
                 let handle = data.handle.clone();
@@ -186,21 +190,21 @@ impl DiscoveredPeripheral {
                         queue.push_back(data.clone());
                     }
                 }
-            },
-            &hci::Message::DisconnectComplete {..} => {
+            }
+            &hci::Message::DisconnectComplete { .. } => {
                 // destroy our stream
                 debug!("removing stream for {} due to disconnect", self.address);
                 let mut stream = self.stream.write().unwrap();
                 *stream = None;
                 // TODO clean up our sockets
-            },
+            }
             msg => {
                 debug!("ignored message {:?}", msg);
             }
         }
     }
 
-    pub fn request_raw_async(&self, data: &mut[u8], handler: Option<RequestCallback>) {
+    pub fn request_raw_async(&self, data: &mut [u8], handler: Option<RequestCallback>) {
         let l = self.stream.read().unwrap();
         match l.as_ref().ok_or(Error::NotConnected) {
             Ok(stream) => {
@@ -231,9 +235,15 @@ impl DiscoveredPeripheral {
     }
 
     pub fn notify(&self, characteristic: &Characteristic, enable: bool) -> Result<()> {
-        info!("setting notify for {}/{:?} to {}", self.address, characteristic.uuid, enable);
+        info!(
+            "setting notify for {}/{:?} to {}",
+            self.address, characteristic.uuid, enable
+        );
         let mut buf = att::read_by_type_req(
-            characteristic.start_handle, characteristic.end_handle, B16(GATT_CLIENT_CHARAC_CFG_UUID));
+            characteristic.start_handle,
+            characteristic.end_handle,
+            B16(GATT_CLIENT_CHARAC_CFG_UUID),
+        );
 
         let data = self.request_raw(&mut buf)?;
 
@@ -245,7 +255,7 @@ impl DiscoveredPeripheral {
                 let mut value = resp.value;
 
                 if enable && use_notify {
-                        value |= 0x0001;
+                    value |= 0x0001;
                 } else if enable && use_indicate {
                     value |= 0x0002;
                 } else if use_notify {
@@ -270,7 +280,9 @@ impl DiscoveredPeripheral {
             }
             Err(err) => {
                 debug!("failed to parse notify response: {:?}", err);
-                Err(Error::Other("failed to get characteristic state".to_string()))
+                Err(Error::Other(
+                    "failed to get characteristic state".to_string(),
+                ))
             }
         }
     }
@@ -284,9 +296,8 @@ impl DiscoveredPeripheral {
         }
 
         // create the socket on which we'll communicate with the device
-        let fd = handle_error(unsafe {
-            libc::socket(libc::AF_BLUETOOTH, libc::SOCK_SEQPACKET, 0)
-        })?;
+        let fd =
+            handle_error(unsafe { libc::socket(libc::AF_BLUETOOTH, libc::SOCK_SEQPACKET, 0) })?;
         debug!("created socket {} to communicate with device", fd);
 
         let local_addr = SockaddrL2 {
@@ -299,15 +310,24 @@ impl DiscoveredPeripheral {
 
         // bind to the socket
         handle_error(unsafe {
-            libc::bind(fd, &local_addr as *const SockaddrL2 as *const libc::sockaddr,
-                       size_of::<SockaddrL2>() as u32)
+            libc::bind(
+                fd,
+                &local_addr as *const SockaddrL2 as *const libc::sockaddr,
+                size_of::<SockaddrL2>() as u32,
+            )
         })?;
         debug!("bound to socket {}", fd);
 
         // configure it as a bluetooth socket
         let mut opt = [1u8, 0];
         handle_error(unsafe {
-            libc::setsockopt(fd, libc::SOL_BLUETOOTH, 4, opt.as_mut_ptr() as *mut libc::c_void, 2)
+            libc::setsockopt(
+                fd,
+                libc::SOL_BLUETOOTH,
+                4,
+                opt.as_mut_ptr() as *mut libc::c_void,
+                2,
+            )
         })?;
         debug!("configured socket {}", fd);
 
@@ -321,8 +341,11 @@ impl DiscoveredPeripheral {
 
         // connect to the device
         handle_error(unsafe {
-            libc::connect(fd, &addr as *const SockaddrL2 as *const libc::sockaddr,
-                          size_of::<SockaddrL2>() as u32)
+            libc::connect(
+                fd,
+                &addr as *const SockaddrL2 as *const libc::sockaddr,
+                size_of::<SockaddrL2>() as u32,
+            )
         }).unwrap();
         debug!("connected to device {} over socket {}", self.address, fd);
 
@@ -338,8 +361,7 @@ impl DiscoveredPeripheral {
         match self.connection_rx.lock().unwrap().recv_timeout(timeout) {
             Ok(handle) => {
                 // create the acl stream that will communicate with the device
-                let s = ACLStream::new(self.c_adapter.adapter.clone(),
-                                       self.address, handle, fd);
+                let s = ACLStream::new(self.c_adapter.adapter.clone(), self.address, handle, fd);
 
                 // replay missed messages
                 let mut queue = self.message_queue.lock().unwrap();
@@ -384,7 +406,12 @@ impl DiscoveredPeripheral {
         Ok(())
     }
 
-    pub fn write_command(&self, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>) {
+    pub fn write_command(
+        &self,
+        characteristic: &Characteristic,
+        data: &[u8],
+        handler: Option<CommandCallback>,
+    ) {
         let l = self.stream.read().unwrap();
 
         match l.as_ref() {
@@ -409,9 +436,7 @@ impl DiscoveredPeripheral {
             Some(stream) => {
                 stream.on_notification(handler);
             }
-            None => {
-                error!("tried to subscribe to notifications, but not yet connected")
-            }
+            None => error!("tried to subscribe to notifications, but not yet connected"),
         }
     }
 

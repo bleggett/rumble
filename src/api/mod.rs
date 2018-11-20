@@ -1,10 +1,10 @@
 use std::fmt;
-use std::fmt::{Display, Formatter, Debug};
+use std::fmt::{Debug, Display, Formatter};
 
-use ::Result;
-use std::collections::BTreeSet;
-use api::UUID::B16;
 use api::UUID::B128;
+use api::UUID::B16;
+use std::collections::BTreeSet;
+use Result;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AddressType {
@@ -13,7 +13,9 @@ pub enum AddressType {
 }
 
 impl Default for AddressType {
-    fn default() -> Self { AddressType::Public }
+    fn default() -> Self {
+        AddressType::Public
+    }
 }
 
 impl AddressType {
@@ -28,7 +30,7 @@ impl AddressType {
     pub fn num(&self) -> u8 {
         match *self {
             AddressType::Public => 0,
-            AddressType::Random => 1
+            AddressType::Random => 1,
         }
     }
 }
@@ -37,14 +39,17 @@ impl AddressType {
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Default)]
 #[repr(C)]
 pub struct BDAddr {
-    pub address: [ u8 ; 6usize ]
+    pub address: [u8; 6usize],
 }
 
 impl Display for BDAddr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let a = self.address;
-        write!(f, "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-               a[5], a[4], a[3], a[2], a[1], a[0])
+        write!(
+            f,
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            a[5], a[4], a[3], a[2], a[1], a[0]
+        )
     }
 }
 
@@ -146,10 +151,12 @@ pub struct Characteristic {
 
 impl Display for Characteristic {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "handle: 0x{:04X}, char properties: 0x{:02X}, \
-                   char value handle: 0x{:04X}, end handle: 0x{:04X}, uuid: {:?}",
-               self.start_handle, self.properties,
-               self.value_handle, self.end_handle, self.uuid)
+        write!(
+            f,
+            "handle: 0x{:04X}, char properties: 0x{:02X}, \
+             char value handle: 0x{:04X}, end handle: 0x{:04X}, uuid: {:?}",
+            self.start_handle, self.properties, self.value_handle, self.end_handle, self.uuid
+        )
     }
 }
 
@@ -172,7 +179,6 @@ impl Display for Characteristic {
 //     /// True if we've discovered the device before
 //     pub has_scan_response: bool,
 // }
-
 
 /// Returns the set of properties associated with the peripheral. These may be updated over time
 /// as additional advertising reports are received.
@@ -244,51 +250,80 @@ pub trait Central: Send + Sync + Clone {
 
     /// Discovers characteristics within the specified range of handles. This is a synchronous
     /// operation.
-    fn discover_characteristics_in_range(&self, address:BDAddr, start: u16, end: u16) -> Result<Vec<Characteristic>>;
+    fn discover_characteristics_in_range(
+        &self,
+        address: BDAddr,
+        start: u16,
+        end: u16,
+    ) -> Result<Vec<Characteristic>>;
 
     /// Sends a command (`write-without-response`) to the characteristic. Takes an optional callback
     /// that will be notified in case of error or when the command has been successfully acked by the
     /// device.
-    fn command_async(&self, address:BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>);
+    fn command_async(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        data: &[u8],
+        handler: Option<CommandCallback>,
+    );
 
     /// Sends a command (write without response) to the characteristic. Synchronously returns a
     /// `Result` with an error set if the command was not accepted by the device.
-    fn command(&self, address:BDAddr, characteristic: &Characteristic, data: &[u8]) -> Result<()>;
+    fn command(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8]) -> Result<()>;
 
     /// Sends a request (write) to the device. Takes an optional callback with either an error if
     /// the request was not accepted or the response from the device.
-    fn request_async(&self, address:BDAddr, characteristic: &Characteristic,
-                     data: &[u8], handler: Option<RequestCallback>);
+    fn request_async(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        data: &[u8],
+        handler: Option<RequestCallback>,
+    );
 
     /// Sends a request (write) to the device. Synchronously returns either an error if the request
     /// was not accepted or the response from the device.
-    fn request(&self, address:BDAddr, characteristic: &Characteristic,
-               data: &[u8]) -> Result<Vec<u8>>;
+    fn request(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        data: &[u8],
+    ) -> Result<Vec<u8>>;
 
     /// Sends a read-by-type request to device for the range of handles covered by the
     /// characteristic and for the specified declaration UUID. See
     /// [here](https://www.bluetooth.com/specifications/gatt/declarations) for valid UUIDs.
     /// Takes an optional callback that will be called with an error or the device response.
-    fn read_by_type_async(&self, address:BDAddr, characteristic: &Characteristic,
-                          uuid: UUID, handler: Option<RequestCallback>);
+    fn read_by_type_async(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        uuid: UUID,
+        handler: Option<RequestCallback>,
+    );
 
     /// Sends a read-by-type request to device for the range of handles covered by the
     /// characteristic and for the specified declaration UUID. See
     /// [here](https://www.bluetooth.com/specifications/gatt/declarations) for valid UUIDs.
     /// Synchronously returns either an error or the device response.
-    fn read_by_type(&self, address:BDAddr, characteristic: &Characteristic,
-                    uuid: UUID) -> Result<Vec<u8>>;
+    fn read_by_type(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        uuid: UUID,
+    ) -> Result<Vec<u8>>;
 
     /// Enables either notify or indicate (depending on support) for the specified characteristic.
     /// This is a synchronous call.
-    fn subscribe(&self, address:BDAddr, characteristic: &Characteristic) -> Result<()>;
+    fn subscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()>;
 
     /// Disables either notify or indicate (depending on support) for the specified characteristic.
     /// This is a synchronous call.
-    fn unsubscribe(&self, address:BDAddr, characteristic: &Characteristic) -> Result<()>;
+    fn unsubscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()>;
 
     /// Registers a handler that will be called when value notification messages are received from
     /// the device. This method should only be used after a connection has been established. Note
     /// that the handler will be called in a common thread, so it should not block.
-    fn on_notification(&self, address:BDAddr, handler: NotificationHandler);
+    fn on_notification(&self, address: BDAddr, handler: NotificationHandler);
 }

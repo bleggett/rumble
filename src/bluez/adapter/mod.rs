@@ -2,43 +2,48 @@ mod acl_stream;
 mod discoveredperipheral;
 mod util;
 
+use bytes::{BufMut, BytesMut};
 use libc;
+use nom::IResult;
 use std;
 use std::ffi::CStr;
-use nom::IResult;
-use bytes::{BytesMut, BufMut};
 
-use std::collections::{HashSet, HashMap, hash_map::Entry};
-use std::sync::{Arc, Mutex};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use ::Result;
-use ::Error;
-use api::{CentralEvent, EventHandler, Characteristic, BDAddr, Central, CommandCallback, RequestCallback, NotificationHandler, UUID, PeripheralDescriptor};
+use api::{
+    BDAddr, Central, CentralEvent, Characteristic, CommandCallback, EventHandler,
+    NotificationHandler, PeripheralDescriptor, RequestCallback, UUID,
+};
+use Error;
+use Result;
 
-use bluez::util::handle_error;
-use bluez::protocol::{hci, att};
 use bluez::adapter::discoveredperipheral::DiscoveredPeripheral;
 use bluez::constants::*;
+use bluez::protocol::{att, hci};
+use bluez::util::handle_error;
 
 #[derive(Copy, Debug)]
 #[repr(C)]
 pub struct HCIDevStats {
-    pub err_rx : u32,
-    pub err_tx : u32,
-    pub cmd_tx : u32,
-    pub evt_rx : u32,
-    pub acl_tx : u32,
-    pub acl_rx : u32,
-    pub sco_tx : u32,
-    pub sco_rx : u32,
-    pub byte_rx : u32,
-    pub byte_tx : u32,
+    pub err_rx: u32,
+    pub err_tx: u32,
+    pub cmd_tx: u32,
+    pub evt_rx: u32,
+    pub acl_tx: u32,
+    pub acl_rx: u32,
+    pub sco_tx: u32,
+    pub sco_rx: u32,
+    pub byte_rx: u32,
+    pub byte_tx: u32,
 }
 
-impl Clone for HCIDevStats{
-    fn clone(&self) -> Self { *self }
+impl Clone for HCIDevStats {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl HCIDevStats {
@@ -53,33 +58,34 @@ impl HCIDevStats {
             sco_tx: 0u32,
             sco_rx: 0u32,
             byte_rx: 0u32,
-            byte_tx: 0u32
+            byte_tx: 0u32,
         }
     }
 }
 
-
 #[derive(Copy, Debug)]
 #[repr(C)]
 pub struct HCIDevInfo {
-    pub dev_id : u16,
-    pub name : [libc::c_char; 8],
-    pub bdaddr : BDAddr,
-    pub flags : u32,
-    pub type_ : u8,
-    pub features : [u8; 8],
-    pub pkt_type : u32,
-    pub link_policy : u32,
-    pub link_mode : u32,
-    pub acl_mtu : u16,
-    pub acl_pkts : u16,
-    pub sco_mtu : u16,
-    pub sco_pkts : u16,
-    pub stat : HCIDevStats,
+    pub dev_id: u16,
+    pub name: [libc::c_char; 8],
+    pub bdaddr: BDAddr,
+    pub flags: u32,
+    pub type_: u8,
+    pub features: [u8; 8],
+    pub pkt_type: u32,
+    pub link_policy: u32,
+    pub link_mode: u32,
+    pub acl_mtu: u16,
+    pub acl_pkts: u16,
+    pub sco_mtu: u16,
+    pub sco_pkts: u16,
+    pub stat: HCIDevStats,
 }
 
 impl Clone for HCIDevInfo {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl HCIDevInfo {
@@ -98,7 +104,7 @@ impl HCIDevInfo {
             acl_pkts: 0u16,
             sco_mtu: 0u16,
             sco_pkts: 0u16,
-            stat: HCIDevStats::default()
+            stat: HCIDevStats::default(),
         }
     }
 }
@@ -112,15 +118,16 @@ struct SockaddrHCI {
 }
 
 impl Clone for SockaddrHCI {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
-
 
 #[derive(Debug, Copy, Clone)]
 pub enum AdapterType {
     BrEdr,
     Amp,
-    Unknown(u8)
+    Unknown(u8),
 }
 
 impl AdapterType {
@@ -143,7 +150,15 @@ impl AdapterType {
 
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
 pub enum AdapterState {
-    Up, Init, Running, Raw, PScan, IScan, Inquiry, Auth, Encrypt
+    Up,
+    Init,
+    Running,
+    Raw,
+    PScan,
+    IScan,
+    Inquiry,
+    Auth,
+    Encrypt,
 }
 
 impl AdapterState {
@@ -189,8 +204,11 @@ impl ConnectedAdapter {
         };
 
         handle_error(unsafe {
-            libc::bind(adapter_fd, &addr as *const SockaddrHCI as *const libc::sockaddr,
-                       std::mem::size_of::<SockaddrHCI>() as u32)
+            libc::bind(
+                adapter_fd,
+                &addr as *const SockaddrHCI as *const libc::sockaddr,
+                std::mem::size_of::<SockaddrHCI>() as u32,
+            )
         })?;
 
         let should_stop = Arc::new(AtomicBool::new(false));
@@ -215,8 +233,10 @@ impl ConnectedAdapter {
     fn set_socket_filter(&self) -> Result<()> {
         let mut filter = BytesMut::with_capacity(14);
         let type_mask = (1 << HCI_COMMAND_PKT) | (1 << HCI_EVENT_PKT) | (1 << HCI_ACLDATA_PKT);
-        let event_mask1 = (1 << EVT_DISCONN_COMPLETE) | (1 << EVT_ENCRYPT_CHANGE) |
-        (1 << EVT_CMD_COMPLETE) | (1 << EVT_CMD_STATUS);
+        let event_mask1 = (1 << EVT_DISCONN_COMPLETE)
+            | (1 << EVT_ENCRYPT_CHANGE)
+            | (1 << EVT_CMD_COMPLETE)
+            | (1 << EVT_CMD_STATUS);
         let event_mask2 = 1 << (EVT_LE_META_EVENT - 32);
         let opcode = 0;
 
@@ -226,9 +246,13 @@ impl ConnectedAdapter {
         filter.put_u16_le(opcode);
 
         handle_error(unsafe {
-            libc::setsockopt(self.adapter_fd, SOL_HCI, HCI_FILTER,
-                             filter.as_mut_ptr() as *mut _ as *mut libc::c_void,
-                             filter.len() as u32)
+            libc::setsockopt(
+                self.adapter_fd,
+                SOL_HCI,
+                HCI_FILTER,
+                filter.as_mut_ptr() as *mut _ as *mut libc::c_void,
+                filter.len() as u32,
+            )
         })?;
         Ok(())
     }
@@ -244,7 +268,11 @@ impl ConnectedAdapter {
             while !should_stop.load(Ordering::Relaxed) {
                 // debug!("reading");
                 let len = handle_error(unsafe {
-                    libc::read(fd, buf.as_mut_ptr() as *mut _ as *mut libc::c_void, buf.len()) as i32
+                    libc::read(
+                        fd,
+                        buf.as_mut_ptr() as *mut _ as *mut libc::c_void,
+                        buf.len(),
+                    ) as i32
                 }).unwrap_or(0) as usize;
                 if len == 0 {
                     continue;
@@ -254,9 +282,7 @@ impl ConnectedAdapter {
 
                 let mut new_cur: Option<Vec<u8>> = Some(vec![]);
                 {
-                    let result = {
-                        hci::message(&cur)
-                    };
+                    let result = { hci::message(&cur) };
 
                     match result {
                         IResult::Done(left, result) => {
@@ -267,7 +293,7 @@ impl ConnectedAdapter {
                         }
                         IResult::Incomplete(_) => {
                             new_cur = None;
-                        },
+                        }
                         IResult::Error(err) => {
                             error!("parse error {}\nfrom: {:?}", err, cur);
                         }
@@ -298,12 +324,10 @@ impl ConnectedAdapter {
 
                 {
                     let mut peripherals = self.peripherals.lock().unwrap();
-                    let peripheral = peripherals.entry(info.bdaddr)
-                        .or_insert_with(|| {
-                            new = true;
-                            DiscoveredPeripheral::new(self.clone(), info.bdaddr)
-                        });
-
+                    let peripheral = peripherals.entry(info.bdaddr).or_insert_with(|| {
+                        new = true;
+                        DiscoveredPeripheral::new(self.clone(), info.bdaddr)
+                    });
 
                     peripheral.handle_device_message(&hci::Message::LEAdvertisingReport(info));
                 }
@@ -319,8 +343,12 @@ impl ConnectedAdapter {
                 let address = info.bdaddr.clone();
                 let handle = info.handle.clone();
 
-                if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
-                    peripheral.get_mut().handle_device_message(&hci::Message::LEConnComplete(info));
+                if let Entry::Occupied(mut peripheral) =
+                    self.peripherals.lock().unwrap().entry(address)
+                {
+                    peripheral
+                        .get_mut()
+                        .handle_device_message(&hci::Message::LEConnComplete(info));
                 } else {
                     warn!("Got connection for unknown device {}", info.bdaddr);
                 }
@@ -341,12 +369,14 @@ impl ConnectedAdapter {
                     // we don't know the handler => device mapping, so send to all and let them filter
                     peripheral.handle_device_message(&message);
                 }
-            },
+            }
             hci::Message::DisconnectComplete { handle, .. } => {
                 let mut handles = self.handle_map.lock().unwrap();
                 match handles.remove(&handle) {
                     Some(address) => {
-                        if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
+                        if let Entry::Occupied(mut peripheral) =
+                            self.peripherals.lock().unwrap().entry(address)
+                        {
                             peripheral.get_mut().handle_device_message(&message);
                         }
                         self.emit(CentralEvent::DeviceDisconnected(address));
@@ -366,7 +396,11 @@ impl ConnectedAdapter {
         debug!("writing({}) {:?}", self.adapter_fd, message);
         let ptr = message.as_mut_ptr();
         handle_error(unsafe {
-            libc::write(self.adapter_fd, ptr as *mut _ as *mut libc::c_void, message.len()) as i32
+            libc::write(
+                self.adapter_fd,
+                ptr as *mut _ as *mut libc::c_void,
+                message.len(),
+            ) as i32
         })?;
         Ok(())
     }
@@ -427,14 +461,14 @@ impl Central for ConnectedAdapter {
     fn connect(&self, address: BDAddr) -> Result<()> {
         match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().connect(),
-            Entry::Vacant(_) => Err(Error::DeviceNotFound)
+            Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
     }
 
     fn disconnect(&self, address: BDAddr) -> Result<()> {
         match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().disconnect(),
-            Entry::Vacant(_) => Err(Error::DeviceNotFound)
+            Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
     }
 
@@ -442,7 +476,12 @@ impl Central for ConnectedAdapter {
         self.discover_characteristics_in_range(address, 0x0001, 0xFFFF)
     }
 
-    fn discover_characteristics_in_range(&self, address: BDAddr, start: u16, end: u16) -> Result<Vec<Characteristic>> {
+    fn discover_characteristics_in_range(
+        &self,
+        address: BDAddr,
+        start: u16,
+        end: u16,
+    ) -> Result<Vec<Characteristic>> {
         let mut results = vec![];
         let mut start = start;
         loop {
@@ -452,7 +491,7 @@ impl Central for ConnectedAdapter {
 
             let data = match self.peripherals.lock().unwrap().entry(address) {
                 Entry::Occupied(mut peripheral) => peripheral.get_mut().request_raw(&mut buf)?,
-                Entry::Vacant(_) => Vec::new()
+                Entry::Vacant(_) => Vec::new(),
             };
 
             match att::characteristics(&data).to_result() {
@@ -481,8 +520,10 @@ impl Central for ConnectedAdapter {
                 }
                 Err(err) => {
                     error!("failed to parse chars: {:?}", err);
-                    return Err(Error::Other(format!("failed to parse characteristics response {:?}",
-                                                    err)));
+                    return Err(Error::Other(format!(
+                        "failed to parse characteristics response {:?}",
+                        err
+                    )));
                 }
             }
         }
@@ -501,9 +542,17 @@ impl Central for ConnectedAdapter {
         Ok(results)
     }
 
-    fn command_async(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<CommandCallback>) {
+    fn command_async(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        data: &[u8],
+        handler: Option<CommandCallback>,
+    ) {
         if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
-            peripheral.get_mut().write_command(characteristic, data, handler)
+            peripheral
+                .get_mut()
+                .write_command(characteristic, data, handler)
         }
     }
 
@@ -513,27 +562,51 @@ impl Central for ConnectedAdapter {
         })
     }
 
-    fn request_async(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8], handler: Option<RequestCallback>) {
+    fn request_async(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        data: &[u8],
+        handler: Option<RequestCallback>,
+    ) {
         if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
-            peripheral.get_mut().request_by_handle(characteristic.value_handle, data, handler);
+            peripheral
+                .get_mut()
+                .request_by_handle(characteristic.value_handle, data, handler);
         }
     }
 
-    fn request(&self, address: BDAddr, characteristic: &Characteristic, data: &[u8]) -> Result<Vec<u8>> {
+    fn request(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        data: &[u8],
+    ) -> Result<Vec<u8>> {
         util::wait_until_done(|done: RequestCallback| {
             self.request_async(address, characteristic, data, Some(done));
         })
     }
 
-    fn read_by_type_async(&self, address: BDAddr, characteristic: &Characteristic, uuid: UUID,
-                          handler: Option<RequestCallback>) {
-        let mut buf = att::read_by_type_req(characteristic.start_handle, characteristic.end_handle, uuid);
+    fn read_by_type_async(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        uuid: UUID,
+        handler: Option<RequestCallback>,
+    ) {
+        let mut buf =
+            att::read_by_type_req(characteristic.start_handle, characteristic.end_handle, uuid);
         if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
             peripheral.get_mut().request_raw_async(&mut buf, handler);
         }
     }
 
-    fn read_by_type(&self, address: BDAddr, characteristic: &Characteristic, uuid: UUID) -> Result<Vec<u8>> {
+    fn read_by_type(
+        &self,
+        address: BDAddr,
+        characteristic: &Characteristic,
+        uuid: UUID,
+    ) -> Result<Vec<u8>> {
         util::wait_until_done(|done: RequestCallback| {
             self.read_by_type_async(address, characteristic, uuid, Some(done));
         })
@@ -542,14 +615,14 @@ impl Central for ConnectedAdapter {
     fn subscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
         match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().notify(characteristic, true),
-            Entry::Vacant(_) => Err(Error::DeviceNotFound)
+            Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
     }
 
     fn unsubscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
         match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().notify(characteristic, false),
-            Entry::Vacant(_) => Err(Error::DeviceNotFound)
+            Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
     }
 
@@ -584,9 +657,10 @@ pub struct Adapter {
 }
 
 // #define HCIGETDEVINFO	_IOR('H', 211, int)
-static HCI_GET_DEV_MAGIC: usize = (2u32 << 0i32 + 8i32 + 8i32 + 14i32 |
-                                   (b'H' as (i32) << 0i32 + 8i32) as (u32) | (211i32 << 0i32) as (u32)) as (usize) |
-4 /* (sizeof(i32)) */ << 0i32 + 8i32 + 8i32;
+static HCI_GET_DEV_MAGIC: usize = (2u32 << 0i32 + 8i32 + 8i32 + 14i32
+    | (b'H' as (i32) << 0i32 + 8i32) as (u32)
+    | (211i32 << 0i32) as (u32)) as (usize)
+    | 4 /* (sizeof(i32)) */ << 0i32 + 8i32 + 8i32;
 
 impl Adapter {
     pub fn from_device_info(di: &HCIDevInfo) -> Adapter {
@@ -606,8 +680,11 @@ impl Adapter {
         di.dev_id = dev_id;
 
         unsafe {
-            handle_error(libc::ioctl(ctl, HCI_GET_DEV_MAGIC as libc::c_ulong,
-                                     &mut di as (*mut HCIDevInfo) as (*mut libc::c_void)))?;
+            handle_error(libc::ioctl(
+                ctl,
+                HCI_GET_DEV_MAGIC as libc::c_ulong,
+                &mut di as (*mut HCIDevInfo) as (*mut libc::c_void),
+            ))?;
         }
 
         Ok(Adapter::from_device_info(&di))

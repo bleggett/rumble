@@ -1,27 +1,23 @@
 use nix;
 use nix::Errno;
 
-use ::Result;
 use Error;
+use Result;
 
 fn errno_to_error(errno: Errno) -> Error {
     match errno {
         nix::Errno::EPERM => Error::PermissionDenied,
         nix::Errno::ENODEV => Error::DeviceNotFound,
         nix::Errno::ENOTCONN => Error::NotConnected,
-        _ => Error::Other(errno.to_string())
+        _ => Error::Other(errno.to_string()),
     }
 }
 
 impl From<nix::Error> for Error {
     fn from(e: nix::Error) -> Self {
         match e {
-            nix::Error::Sys(errno) => {
-                errno_to_error(errno)
-            },
-            _ => {
-                Error::Other(e.to_string())
-            }
+            nix::Error::Sys(errno) => errno_to_error(errno),
+            _ => Error::Other(e.to_string()),
         }
     }
 }
