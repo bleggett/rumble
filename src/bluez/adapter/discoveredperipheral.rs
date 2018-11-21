@@ -362,10 +362,10 @@ impl DiscoveredPeripheral {
 
         //TODO not a fan of reaching back up into the parent adapter to do this
         // restart scanning if we were already, as connecting to a device seems to kill it
-        if self.c_adapter.scan_enabled.load(Ordering::Relaxed) {
-            self.c_adapter.start_scan()?;
-            debug!("restarted scanning");
-        }
+        // if self.c_adapter.scan_enabled.load(Ordering::Relaxed) {
+        // self.c_adapter.start_scan()?;
+        // debug!("restarted scanning");
+        // }
 
         // wait until we get the connection notice
         let timeout = Duration::from_secs(20);

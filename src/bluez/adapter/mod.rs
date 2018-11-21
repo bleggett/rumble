@@ -310,7 +310,7 @@ impl ConnectedAdapter {
     fn emit(&self, event: CentralEvent) {
         debug!("emitted {:?}", event);
         let handlers = self.event_handlers.clone();
-        let vec = handlers.try_lock().unwrap();
+        let vec = handlers.lock().unwrap();
         for handler in (*vec).iter() {
             handler(event.clone());
         }
@@ -325,6 +325,7 @@ impl ConnectedAdapter {
                 let address = info.bdaddr.clone();
 
                 {
+                    debug!("TRYLOCK LEAdvertisingReport");
                     let mut peripherals = self.peripherals.try_lock().unwrap();
                     let peripheral = peripherals.entry(info.bdaddr).or_insert_with(|| {
                         new = true;
@@ -345,14 +346,17 @@ impl ConnectedAdapter {
                 let address = info.bdaddr.clone();
                 let handle = info.handle.clone();
 
-                if let Entry::Occupied(mut peripheral) =
-                    self.peripherals.try_lock().unwrap().entry(address)
                 {
-                    peripheral
-                        .get_mut()
-                        .handle_device_message(&hci::Message::LEConnComplete(info));
-                } else {
-                    warn!("Got connection for unknown device {}", info.bdaddr);
+                    debug!("TRYLOCK LEConnComplete");
+                    if let Entry::Occupied(mut peripheral) =
+                        self.peripherals.try_lock().unwrap().entry(address)
+                    {
+                        peripheral
+                            .get_mut()
+                            .handle_device_message(&hci::Message::LEConnComplete(info));
+                    } else {
+                        warn!("Got connection for unknown device {}", info.bdaddr);
+                    }
                 }
 
                 let mut handles = self.handle_map.try_lock().unwrap();
@@ -365,10 +369,12 @@ impl ConnectedAdapter {
 
                 // TODO this is a bit risky from a deadlock perspective (note mutexes are not
                 // reentrant in rust!)
-                let mut peripherals = self.peripherals.try_lock().unwrap();
+                debug!("Bout to lock for ACLDataPacket");
+                let mut peripherals = self.peripherals.lock().unwrap();
 
                 for peripheral in peripherals.values_mut() {
                     // we don't know the handler => device mapping, so send to all and let them filter
+                    debug!("sending to all devices");
                     peripheral.handle_device_message(&message);
                 }
             }
@@ -376,6 +382,7 @@ impl ConnectedAdapter {
                 let mut handles = self.handle_map.try_lock().unwrap();
                 match handles.remove(&handle) {
                     Some(address) => {
+                        debug!("TRYLOCK DisconnectComplete");
                         if let Entry::Occupied(mut peripheral) =
                             self.peripherals.try_lock().unwrap().entry(address)
                         {
@@ -438,7 +445,7 @@ impl PeripheralDescriptor {
 impl Central for ConnectedAdapter {
     fn on_event(&self, handler: EventHandler) {
         let list = self.event_handlers.clone();
-        list.try_lock().unwrap().push(handler);
+        list.lock().unwrap().push(handler);
     }
 
     fn start_scan(&self) -> Result<()> {
@@ -451,25 +458,39 @@ impl Central for ConnectedAdapter {
     }
 
     fn peripherals(&self) -> Vec<PeripheralDescriptor> {
-        let l = self.peripherals.try_lock().unwrap();
+        debug!("TRYLOCK peripherals");
+        let l = self.peripherals.lock().unwrap();
         l.values().map(|p| PeripheralDescriptor::new(p)).collect()
     }
 
     fn peripheral(&self, address: BDAddr) -> Option<PeripheralDescriptor> {
-        let l = self.peripherals.try_lock().unwrap();
+        debug!("TRYLOCK peripheral");
+        let l = self.peripherals.lock().unwrap();
         l.get(&address).map(|p| PeripheralDescriptor::new(p))
     }
 
     fn connect(&self, address: BDAddr) -> Result<()> {
         debug!("Connecting to {}", address);
-        match self.peripherals.try_lock().unwrap().entry(address) {
-            Entry::Occupied(mut peripheral) => peripheral.get_mut().connect(),
-            Entry::Vacant(_) => Err(Error::DeviceNotFound),
-        }
+        let test = {
+            debug!("TRYLOCK connect");
+            match self.peripherals.lock().unwrap().entry(address) {
+                Entry::Occupied(peripheral) => Ok(peripheral.get().clone()),
+                Entry::Vacant(_) => Err(Error::DeviceNotFound),
+            }
+        };
+        test.unwrap().connect()
+        // let mut peripheral = {
+        //     debug!("Locking peripherals in connect");
+        //     match self.peripherals.entry(address) {
+        //         Entry::Occupied(mut peripheral) => Ok(peripheral.get_mut()),
+        //         Entry::Vacant(_) => Err(Error::DeviceNotFound),
+        //     }
+        // };
     }
 
     fn disconnect(&self, address: BDAddr) -> Result<()> {
-        match self.peripherals.try_lock().unwrap().entry(address) {
+        debug!("TRYLOCK disconnect");
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().disconnect(),
             Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
@@ -487,15 +508,26 @@ impl Central for ConnectedAdapter {
     ) -> Result<Vec<Characteristic>> {
         let mut results = vec![];
         let mut start = start;
+
+        let peripheral = {
+            debug!("TRYLOCK discover-characteristics");
+            match self.peripherals.lock().unwrap().entry(address) {
+                Entry::Occupied(peripheral) => Ok(peripheral.get().clone()),
+                Entry::Vacant(_) => Err(Error::DeviceNotFound),
+            }
+        }.unwrap();
+
         loop {
             debug!("discovering chars in range [{}, {}]", start, end);
 
             let mut buf = att::read_by_type_req(start, end, UUID::B16(GATT_CHARAC_UUID));
 
-            let data = match self.peripherals.try_lock().unwrap().entry(address) {
-                Entry::Occupied(mut peripheral) => peripheral.get_mut().request_raw(&mut buf)?,
-                Entry::Vacant(_) => Vec::new(),
-            };
+            // let data = match self.peripherals.try_lock().unwrap().entry(address) {
+            //     Entry::Occupied(mut peripheral) => peripheral.get_mut().request_raw(&mut buf)?,
+            //     Entry::Vacant(_) => Vec::new(),
+            // };
+
+            let data = peripheral.request_raw(&mut buf)?;
 
             match att::characteristics(&data).to_result() {
                 Ok(result) => {
@@ -538,9 +570,17 @@ impl Central for ConnectedAdapter {
         }
 
         // update our cache
-        if let Entry::Occupied(mut o) = self.peripherals.try_lock().unwrap().entry(address) {
-            o.get_mut().update_characteristics(results.clone());
-        }
+
+        //TODO fix clone here, this is not an update
+        let test = {
+            debug!("TRYLOCK discover-characteristics update");
+            match self.peripherals.lock().unwrap().entry(address) {
+                Entry::Occupied(peripheral) => Ok(peripheral.get().clone()),
+                Entry::Vacant(_) => Err(Error::DeviceNotFound),
+            }
+        };
+        debug!("Cloned chars: {:?}", results);
+        test.unwrap().update_characteristics(results.clone());
 
         Ok(results)
     }
@@ -552,8 +592,8 @@ impl Central for ConnectedAdapter {
         data: &[u8],
         handler: Option<CommandCallback>,
     ) {
-        if let Entry::Occupied(mut peripheral) = self.peripherals.try_lock().unwrap().entry(address)
-        {
+        debug!("TRYLOCK command_async");
+        if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
             peripheral
                 .get_mut()
                 .write_command(characteristic, data, handler)
@@ -573,8 +613,8 @@ impl Central for ConnectedAdapter {
         data: &[u8],
         handler: Option<RequestCallback>,
     ) {
-        if let Entry::Occupied(mut peripheral) = self.peripherals.try_lock().unwrap().entry(address)
-        {
+        debug!("TRYLOCK request_async");
+        if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
             peripheral
                 .get_mut()
                 .request_by_handle(characteristic.value_handle, data, handler);
@@ -601,8 +641,8 @@ impl Central for ConnectedAdapter {
     ) {
         let mut buf =
             att::read_by_type_req(characteristic.start_handle, characteristic.end_handle, uuid);
-        if let Entry::Occupied(mut peripheral) = self.peripherals.try_lock().unwrap().entry(address)
-        {
+        debug!("TRYLOCK read_by_type_async");
+        if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
             peripheral.get_mut().request_raw_async(&mut buf, handler);
         }
     }
@@ -619,22 +659,24 @@ impl Central for ConnectedAdapter {
     }
 
     fn subscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
-        match self.peripherals.try_lock().unwrap().entry(address) {
+        debug!("TRYLOCK subscribe");
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().notify(characteristic, true),
             Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
     }
 
     fn unsubscribe(&self, address: BDAddr, characteristic: &Characteristic) -> Result<()> {
-        match self.peripherals.try_lock().unwrap().entry(address) {
+        debug!("TRYLOCK unsubscribe");
+        match self.peripherals.lock().unwrap().entry(address) {
             Entry::Occupied(mut peripheral) => peripheral.get_mut().notify(characteristic, false),
             Entry::Vacant(_) => Err(Error::DeviceNotFound),
         }
     }
 
     fn on_notification(&self, address: BDAddr, handler: NotificationHandler) {
-        if let Entry::Occupied(mut peripheral) = self.peripherals.try_lock().unwrap().entry(address)
-        {
+        debug!("TRYLOCK on_notification");
+        if let Entry::Occupied(mut peripheral) = self.peripherals.lock().unwrap().entry(address) {
             peripheral.get_mut().add_notification(handler);
         }
     }
