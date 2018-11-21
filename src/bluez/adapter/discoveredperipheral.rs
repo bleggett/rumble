@@ -124,6 +124,7 @@ impl DiscoveredPeripheral {
     }
 
     pub fn handle_device_message(&mut self, message: &hci::Message) {
+        debug!("Handling message");
         match message {
             &hci::Message::LEAdvertisingReport(ref info) => {
                 assert_eq!(
@@ -173,7 +174,7 @@ impl DiscoveredPeripheral {
 
                 debug!("got le conn complete {:?}", info);
                 self.connection_tx
-                    .lock()
+                    .try_lock()
                     .unwrap()
                     .send(info.handle.clone())
                     .unwrap();
@@ -192,7 +193,7 @@ impl DiscoveredPeripheral {
                     Err(_e) => {
                         // we can't access the stream right now because we're still connecting, so
                         // we'll push the message onto a queue for now
-                        let mut queue = self.message_queue.lock().unwrap();
+                        let mut queue = self.message_queue.try_lock().unwrap();
                         queue.push_back(data.clone());
                     }
                 }
@@ -368,13 +369,13 @@ impl DiscoveredPeripheral {
 
         // wait until we get the connection notice
         let timeout = Duration::from_secs(20);
-        match self.connection_rx.lock().unwrap().recv_timeout(timeout) {
+        match self.connection_rx.try_lock().unwrap().recv_timeout(timeout) {
             Ok(handle) => {
                 // create the acl stream that will communicate with the device
                 let s = ACLStream::new(self.c_adapter.adapter.clone(), self.address, handle, fd);
 
                 // replay missed messages
-                let mut queue = self.message_queue.lock().unwrap();
+                let mut queue = self.message_queue.try_lock().unwrap();
                 while !queue.is_empty() {
                     let msg = queue.pop_back().unwrap();
                     if s.handle == msg.handle {
