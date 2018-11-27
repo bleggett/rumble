@@ -237,6 +237,10 @@ pub trait Central: Send + Sync + Clone {
     /// discovered.
     fn peripheral(&self, address: BDAddr) -> Option<PeripheralDescriptor>;
 
+    ///Returns a particular [`Peripheral`](trait.Peripheral.html) by name if it has been
+    /// discovered.
+    fn peripheral_byname(&self, local_name: String) -> Option<PeripheralDescriptor>;
+
     /// Creates a connection to the device. This is a synchronous operation; if this method returns
     /// Ok there has been successful connection. Note that peripherals allow only one connection at
     /// a time. Operations that attempt to communicate with a device will fail until it is connected.

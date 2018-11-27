@@ -59,7 +59,7 @@ pub struct DiscoveredPeripheral {
     c_adapter: ConnectedAdapter,
     pub address: BDAddr,
     address_type: AddressType,
-    local_name: String,
+    pub local_name: String,
     tx_power_level: i8,
     manufacturer_data: Vec<u8>,
     discovery_count: u32,

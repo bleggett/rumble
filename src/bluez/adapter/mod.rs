@@ -190,7 +190,6 @@ pub struct ConnectedAdapter {
     event_handlers: Arc<Mutex<Vec<EventHandler>>>,
 }
 
-//TODO remove `unwrap`s
 impl ConnectedAdapter {
     pub fn new(adapter: &Adapter) -> Result<ConnectedAdapter> {
         let adapter_fd = handle_error(unsafe {
@@ -470,13 +469,22 @@ impl Central for ConnectedAdapter {
         l.get(&address).map(|p| PeripheralDescriptor::new(p))
     }
 
+    fn peripheral_byname(&self, local_name: String) -> Option<PeripheralDescriptor> {
+        debug!("TRYLOCK peripheral2");
+        let l = self.peripherals.lock().unwrap();
+        l.values()
+            .find(|p| p.local_name == local_name)
+            .map(|p| PeripheralDescriptor::new(p))
+    }
+
     fn connect(&self, address: BDAddr) -> Result<()> {
         debug!("Connecting to {}", address);
+        let mut periph = self.peripherals.lock().unwrap();
         let test = {
             debug!("TRYLOCK connect");
             //TODO avoid clone
-            match self.peripherals.lock().unwrap().entry(address) {
-                Entry::Occupied(peripheral) => Ok(peripheral.get().clone()),
+            match periph.entry(address) {
+                Entry::Occupied(peripheral) => Ok(peripheral.into_mut()),
                 Entry::Vacant(_) => Err(Error::DeviceNotFound),
             }
         };
