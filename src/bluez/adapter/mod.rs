@@ -4,7 +4,7 @@ mod util;
 
 use bytes::{BufMut, BytesMut};
 use libc;
-use nom::IResult;
+use nom;
 use std;
 use std::ffi::CStr;
 
@@ -287,17 +287,17 @@ impl ConnectedAdapter {
                     let result = { hci::message(&cur) };
 
                     match result {
-                        IResult::Done(left, result) => {
+                        Ok((left, result)) => {
                             ConnectedAdapter::handle(&connected, result);
                             if !left.is_empty() {
                                 new_cur = Some(left.to_owned());
                             };
                         }
-                        IResult::Incomplete(_) => {
+                        Err(nom::Err::Incomplete(_)) => {
                             new_cur = None;
                         }
-                        IResult::Error(err) => {
-                            error!("parse error {}\nfrom: {:?}", err, cur);
+                        Err(nom::Err::Error(err)) | Err(nom::Err::Failure(err)) => {
+                            error!("parse error {:?}\nfrom: {:?}", err, cur);
                         }
                     }
                 };
@@ -531,9 +531,9 @@ impl Central for ConnectedAdapter {
 
             let data = peripheral.request_raw(&mut buf)?;
 
-            match att::characteristics(&data).to_result() {
+            match att::characteristics(&data) {
                 Ok(result) => {
-                    match result {
+                    match result.1 {
                         Ok(chars) => {
                             debug!("Chars: {:#?}", chars);
 
